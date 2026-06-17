@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Vinyl Display</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <!-- Idle / listening overlay -->
+  <div id="overlay" class="overlay">
+    <div class="overlay-inner">
+      <div class="disc"></div>
+      <p id="overlay-text">Waiting for a record…</p>
+    </div>
+  </div>
+
+  <main id="now" class="now hidden">
+    <section class="left">
+      <div class="art-wrap">
+        <img id="art" class="art" alt="" />
+      </div>
+
+      <div class="meta">
+        <h1 id="title">—</h1>
+        <h2 id="artist">—</h2>
+        <p id="album" class="album">—</p>
+      </div>
+
+      <div class="progress">
+        <div class="bar"><div id="bar-fill" class="bar-fill"></div></div>
+        <div class="times">
+          <span id="elapsed">0:00</span>
+          <span id="duration">0:00</span>
+        </div>
+      </div>
+
+      <div id="next" class="next hidden">
+        <span class="next-label">Up next</span>
+        <span id="next-title" class="next-title"></span>
+      </div>
+    </section>
+
+    <section class="right">
+      <div id="lyrics" class="lyrics"></div>
+      <div id="lyrics-empty" class="lyrics-empty hidden">No lyrics available</div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

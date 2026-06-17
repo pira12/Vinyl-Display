@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+config.yaml
+*.wav
+.cache/
+db/index.json
+.DS_Store
