@@ -1,0 +1,8 @@
+# Vinyl Display — backend dependencies
+fastapi>=0.110
+uvicorn[standard]>=0.29
+sounddevice>=0.4.6      # USB audio capture (needs PortAudio: apt install libportaudio2)
+soundfile>=0.12         # write WAV files for the recognizer
+numpy>=1.24
+httpx>=0.27             # async HTTP for MusicBrainz / LRCLIB
+PyYAML>=6.0
