@@ -23,8 +23,9 @@ def _now_ms() -> int:
 class StateManager:
     def __init__(self, speed_factor: float = 1.0) -> None:
         self.speed_factor = speed_factor
+        self.listening: bool = True        # recognition loop on/off (user control)
 
-        self.status: str = "idle"          # idle | listening | playing | unknown | error
+        self.status: str = "idle"          # idle | listening | playing | unknown | paused | error
         self.track: Optional[Dict[str, Any]] = None
         self.album: Dict[str, Any] = {}
         self.tracklist: List[Dict[str, Any]] = []
@@ -79,6 +80,19 @@ class StateManager:
         self._touch()
         self.publish()
 
+    def set_listening(self, enabled: bool) -> None:
+        """Turn the recognition loop on or off (user control)."""
+        enabled = bool(enabled)
+        if enabled == self.listening:
+            return
+        self.listening = enabled
+        if not enabled:
+            self.status = "paused"
+            self.track = None
+            self.lyrics = {"synced": False, "lines": []}
+        self._touch()
+        self.publish()
+
     def resync(self, position_ms: int) -> None:
         """Update position for the current track without rebuilding metadata."""
         self.position_ms = position_ms
@@ -92,6 +106,7 @@ class StateManager:
     def payload(self) -> Dict[str, Any]:
         return {
             "status": self.status,
+            "listening": self.listening,
             "updated_at": self.updated_at,
             "position_ms": self.position_ms,
             "speed_factor": self.speed_factor,

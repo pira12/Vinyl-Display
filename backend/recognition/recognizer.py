@@ -53,6 +53,12 @@ class RecognitionService:
 
     async def _tick(self) -> bool:
         """Run one recognition cycle. Returns True when locked on a track."""
+        # Paused by the user => do no recognition until switched back on.
+        if not self.state.listening:
+            self.state.set_status("paused")
+            self._current = None
+            return False
+
         # Silence => idle. Poll quickly so we notice audio resuming.
         if self.capture is not None and not self.is_mock:
             if self.capture.rms() < self.cfg.audio.silence_rms:

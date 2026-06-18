@@ -103,9 +103,30 @@ function applyState(next) {
     $("overlay").classList.remove("hidden");
     $("overlay-text").textContent =
       state.status === "unknown" ? "Unknown record" :
+      state.status === "paused" ? "Paused" :
       state.status === "listening" ? "Listening…" : "Waiting for a record…";
   }
   renderNowPlayingBar();
+  renderListenBtn();
+}
+
+// ---------- listening control ----------
+function renderListenBtn() {
+  const on = !state || state.listening !== false;   // default to "on"
+  $("listen-btn").textContent = on ? "Stop listening" : "Start listening";
+  $("listen-btn").classList.toggle("paused", !on);
+}
+
+async function toggleListening() {
+  const on = !state || state.listening !== false;
+  try {
+    await api("/api/listen", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: !on }),
+    });
+  } catch (e) { return; }
+  // The websocket broadcast updates the button; toast for feedback.
+  toast(on ? "Listening stopped." : "Listening started.");
 }
 
 // ---------- display rendering ----------
@@ -469,6 +490,7 @@ $("settings-btn").onclick = () => {
   if (opening) loadSettings();
 };
 $("settings-save").onclick = saveSettings;
+$("listen-btn").onclick = toggleListening;
 
 // ---------- boot ----------
 setMode(initialMode());

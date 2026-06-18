@@ -124,6 +124,15 @@ def create_app(state: StateManager, index: TrackIndex,
     async def api_record_status() -> JSONResponse:
         return JSONResponse(enrollment.recording_status())
 
+    # ---- listening control ----
+    @app.post("/api/listen")
+    async def api_listen(request: Request) -> JSONResponse:
+        body = await request.json() or {}
+        if "enabled" not in body or not isinstance(body["enabled"], bool):
+            return JSONResponse({"error": "enabled (bool) required"}, status_code=400)
+        state.set_listening(body["enabled"])
+        return JSONResponse({"listening": state.listening})
+
     # ---- settings ----
     @app.get("/api/settings")
     async def api_get_settings() -> JSONResponse:

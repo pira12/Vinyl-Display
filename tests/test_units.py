@@ -33,6 +33,20 @@ def test_config_loads_nested_sections(tmp_path):
     assert cfg.recognition.backend == "olaf"   # unspecified key keeps its default
 
 
+def test_state_listening_toggle():
+    from backend.state import StateManager
+
+    s = StateManager()
+    assert s.listening is True
+    assert s.payload()["listening"] is True
+    s.set_listening(False)
+    assert s.listening is False
+    assert s.status == "paused"
+    assert s.payload()["listening"] is False
+    s.set_listening(True)
+    assert s.listening is True
+
+
 def test_parse_lrc_sorts_and_converts():
     lines = parse_lrc("[00:01.00]first\n[00:03.50]second\n[00:00.00]intro")
     assert [l["t"] for l in lines] == [0, 1000, 3500]

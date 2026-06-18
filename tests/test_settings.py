@@ -201,3 +201,14 @@ def test_settings_post_rejects_bad_value(tmp_path):
                        json={"playback.speed_factor": 5.0})
     assert resp.status_code == 400
     assert "playback.speed_factor" in resp.json()["fields"]
+
+
+def test_listen_toggle_route(tmp_path):
+    client, _ = _client(tmp_path)
+    H = {"X-Auth-Token": "secret"}
+    assert client.post("/api/listen", json={"enabled": False}).status_code == 401  # gated
+    r = client.post("/api/listen", headers=H, json={"enabled": False})
+    assert r.status_code == 200 and r.json()["listening"] is False
+    r = client.post("/api/listen", headers=H, json={"enabled": True})
+    assert r.json()["listening"] is True
+    assert client.post("/api/listen", headers=H, json={}).status_code == 400
