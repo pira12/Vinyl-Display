@@ -3,8 +3,10 @@ art, and the phone companion app + its JSON API."""
 
 from __future__ import annotations
 
+import hmac
 import logging
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
@@ -20,8 +22,24 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 
 def create_app(state: StateManager, index: TrackIndex,
-               enrollment: EnrollmentService, art_dir: str) -> FastAPI:
+               enrollment: EnrollmentService, art_dir: str,
+               auth_token: Optional[str] = None) -> FastAPI:
     app = FastAPI(title="Vinyl Display")
+
+    @app.middleware("http")
+    async def require_token(request: Request, call_next):
+        """Gate the companion API behind a shared token.
+
+        The kiosk display (``/``, ``/ws``, ``/art``) stays open for local use;
+        only the management/control API — which can start audio capture — is
+        protected. Token may arrive as an ``X-Auth-Token`` header or ``?token=``.
+        """
+        if auth_token and request.url.path.startswith("/api"):
+            supplied = (request.headers.get("x-auth-token")
+                        or request.query_params.get("token") or "")
+            if not hmac.compare_digest(supplied, auth_token):
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return await call_next(request)
 
     # ---- display (kiosk) ----
     @app.get("/")
@@ -75,9 +93,13 @@ def create_app(state: StateManager, index: TrackIndex,
 
     @app.post("/api/record/start")
     async def api_record_start(request: Request) -> JSONResponse:
-        body = await request.json()
+        body = await request.json() or {}
+        album_id = body.get("album_id")
+        if not album_id:
+            return JSONResponse({"error": "album_id required"}, status_code=400)
+        side = str(body.get("side", "A"))[:2]
         try:
-            enrollment.start_recording(body["album_id"], body.get("side", "A"))
+            enrollment.start_recording(album_id, side)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse(enrollment.recording_status())

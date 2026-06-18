@@ -11,5 +11,27 @@ ExecStart=/home/pi/vinyl-display/.venv/bin/python -m backend.main --config /home
 Restart=on-failure
 RestartSec=3
 
+# --- sandboxing (least privilege) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# the app only needs to write its database/cache and the audio scratch dir
+ReadWritePaths=/home/pi/.olaf /home/pi/.cache/vinyl-display /dev/shm
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# audio capture needs the sound device group
+SupplementaryGroups=audio
+# Note: the API is protected by a token (server.auth_token). To also restrict
+# it at the network layer, add a firewall rule limiting tcp/8080 to your LAN,
+# e.g.:  sudo ufw allow from 192.168.0.0/16 to any port 8080
+# (We avoid systemd IPAddressAllow here because it would also block the app's
+# outbound MusicBrainz/LRCLIB lookups during enrollment.)
+
 [Install]
 WantedBy=multi-user.target

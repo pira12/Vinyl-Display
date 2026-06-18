@@ -69,3 +69,47 @@ def test_index_round_trip(tmp_path):
     assert "al1" in reloaded.albums
     assert reloaded.albums["al1"].tracklist[1].title == "Two"
     assert reloaded.sides["al1-side-a"].tracks[1].start_ms == 200000
+
+
+def _enrollment(tmp_path):
+    from backend.enrollment import EnrollmentService
+    from backend.metadata.lyrics import LyricsClient
+    from backend.metadata.musicbrainz import MusicBrainzClient
+    from backend.recognition.mock import MockRecognizer
+
+    cfg = load_config("does-not-exist.yaml")
+    cfg.metadata.cache_dir = str(tmp_path / "cache")
+    cfg.recognition.olaf_db = str(tmp_path / "db" / "db")
+    index = TrackIndex(str(tmp_path / "index.json"))
+    mb = MusicBrainzClient("UA", str(tmp_path / "cache"))
+    return cfg, index, EnrollmentService(
+        cfg, index, MockRecognizer(), mb, LyricsClient("UA"),
+        capture=None, art_dir=str(tmp_path / "art"),
+    )
+
+
+def test_add_album_rejects_bad_mbid(tmp_path):
+    import asyncio
+    import pytest
+
+    _, _, enr = _enrollment(tmp_path)
+    with pytest.raises(ValueError):
+        asyncio.run(enr.add_album("../../etc/passwd"))
+
+
+def test_api_requires_token(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from backend.server import create_app
+    from backend.state import StateManager
+
+    cfg, index, enr = _enrollment(tmp_path)
+    app = create_app(StateManager(), index, enr,
+                     art_dir=str(tmp_path / "art"), auth_token="secret")
+    client = TestClient(app)
+
+    assert client.get("/healthz").status_code == 200            # display: open
+    assert client.get("/api/collection").status_code == 401     # API: gated
+    ok = client.get("/api/collection", headers={"X-Auth-Token": "secret"})
+    assert ok.status_code == 200
+    assert client.get("/api/collection?token=secret").status_code == 200

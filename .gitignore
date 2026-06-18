@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 venv/
 config.yaml
+auth_token.txt
 *.wav
 .cache/
 db/index.json

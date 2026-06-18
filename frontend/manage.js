@@ -4,10 +4,37 @@
 const $ = (id) => document.getElementById(id);
 let canRecord = false;
 
-async function api(path, opts) {
+// ---- token auth ----
+// Token can arrive as ?token=… (then it's saved and stripped from the URL),
+// or be entered manually. It's sent as X-Auth-Token on every API call.
+function loadToken() {
+  const url = new URL(location.href);
+  const fromUrl = url.searchParams.get("token");
+  if (fromUrl) {
+    localStorage.setItem("vinyl_token", fromUrl);
+    url.searchParams.delete("token");
+    history.replaceState({}, "", url.pathname + url.search);
+  }
+  return localStorage.getItem("vinyl_token") || "";
+}
+let token = loadToken();
+
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({ "X-Auth-Token": token }, opts.headers || {});
   const res = await fetch(path, opts);
+  if (res.status === 401) {
+    $("auth-needed").classList.remove("hidden");
+    throw new Error("unauthorized");
+  }
   return res.json();
 }
+
+$("token-btn").onclick = () => {
+  token = $("token-input").value.trim();
+  localStorage.setItem("vinyl_token", token);
+  $("auth-needed").classList.add("hidden");
+  loadCollection();
+};
 
 function toast(msg) {
   const t = $("toast");
@@ -60,7 +87,12 @@ function sidesOf(a) {
 }
 
 async function loadCollection() {
-  const data = await api("/api/collection");
+  let data;
+  try {
+    data = await api("/api/collection");
+  } catch (e) {
+    return;   // 401 banner already shown
+  }
   canRecord = !!(data.recording && data.recording.can_record);
   $("no-record").classList.toggle("hidden", canRecord);
 
@@ -144,9 +176,53 @@ async function cancelRecording() {
   $("rec-bar").classList.add("hidden");
 }
 
+// ---- live now-playing bar (read-only websocket, doubles as a remote) ----
+let npState = null;
+
+function fmt(ms) {
+  const s = Math.max(0, Math.floor((ms || 0) / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function renderNowPlaying(m) {
+  npState = m;
+  const np = $("np");
+  if (m.status === "playing" && m.track) {
+    np.classList.remove("hidden");
+    $("np-title").textContent = m.track.title || "";
+    $("np-sub").textContent = (m.track.artist || "") +
+      (m.album && m.album.title ? " · " + m.album.title : "");
+    const art = m.album && m.album.art_url;
+    if (art) { $("np-art").src = art; $("np-art").style.visibility = "visible"; }
+    else { $("np-art").style.visibility = "hidden"; }
+  } else {
+    np.classList.add("hidden");
+  }
+}
+
+function tickNowPlaying() {
+  if (npState && npState.status === "playing" && npState.track) {
+    const drift = (Date.now() - npState.updated_at) * (npState.speed_factor || 1);
+    const dur = npState.track.duration_ms || 0;
+    const pos = Math.min((npState.position_ms || 0) + drift, dur || Infinity);
+    $("np-fill").style.width = dur ? `${Math.min(100, (pos / dur) * 100)}%` : "0%";
+  }
+  requestAnimationFrame(tickNowPlaying);
+}
+
+function connectNowPlaying() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onmessage = (ev) => renderNowPlaying(JSON.parse(ev.data));
+  ws.onclose = () => setTimeout(connectNowPlaying, 2000);
+  ws.onerror = () => ws.close();
+}
+
 $("search-btn").onclick = search;
 $("q").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
 $("stop-btn").onclick = stopRecording;
 $("cancel-btn").onclick = cancelRecording;
 
 loadCollection();
+connectNowPlaying();
+requestAnimationFrame(tickNowPlaying);
