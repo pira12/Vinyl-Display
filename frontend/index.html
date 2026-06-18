@@ -2,53 +2,101 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Vinyl Display</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
-<body>
-  <!-- Blurred album-art backdrop -->
+<body data-mode="display">
+  <!-- Blurred album-art backdrop (shared by both modes) -->
   <div id="backdrop" class="backdrop"></div>
 
-  <!-- Idle / listening overlay -->
-  <div id="overlay" class="overlay">
-    <div class="overlay-inner">
-      <div class="disc"></div>
-      <p id="overlay-text">Waiting for a record…</p>
+  <!-- Mode switch -->
+  <nav id="modebar">
+    <button data-target="display" class="active">Display</button>
+    <button data-target="add">Collection</button>
+  </nav>
+
+  <!-- ============ DISPLAY MODE ============ -->
+  <section id="display-view">
+    <div id="overlay" class="overlay">
+      <div class="overlay-inner">
+        <div class="disc"></div>
+        <p id="overlay-text">Waiting for a record…</p>
+      </div>
     </div>
-  </div>
 
-  <main id="now" class="now hidden">
-    <section class="left">
-      <div class="art-wrap">
-        <img id="art" class="art" alt="" />
-      </div>
+    <main id="now" class="now hidden">
+      <section class="left">
+        <div class="art-wrap"><img id="art" class="art" alt="" /></div>
+        <div class="meta">
+          <h1 id="title">—</h1>
+          <h2 id="artist">—</h2>
+          <p id="album" class="album">—</p>
+        </div>
+        <div class="progress">
+          <div class="bar"><div id="bar-fill" class="bar-fill"></div></div>
+          <div class="times"><span id="elapsed">0:00</span><span id="duration">0:00</span></div>
+        </div>
+        <div id="next" class="next hidden">
+          <span class="next-label">Up next</span>
+          <span id="next-title" class="next-title"></span>
+        </div>
+      </section>
+      <section class="right">
+        <div id="lyrics" class="lyrics"></div>
+        <div id="lyrics-empty" class="lyrics-empty hidden">No lyrics available</div>
+      </section>
+    </main>
+  </section>
 
-      <div class="meta">
-        <h1 id="title">—</h1>
-        <h2 id="artist">—</h2>
-        <p id="album" class="album">—</p>
-      </div>
+  <!-- ============ COLLECTION MODE ============ -->
+  <section id="add-view">
+    <div class="add-inner">
+      <h1>🎶 My Vinyl Collection</h1>
 
-      <div class="progress">
-        <div class="bar"><div id="bar-fill" class="bar-fill"></div></div>
-        <div class="times">
-          <span id="elapsed">0:00</span>
-          <span id="duration">0:00</span>
+      <div id="np" class="np hidden">
+        <img id="np-art" alt="" />
+        <div class="np-info">
+          <div id="np-title" class="np-title"></div>
+          <div id="np-sub" class="np-sub"></div>
+          <div class="np-bar"><div id="np-fill"></div></div>
         </div>
       </div>
 
-      <div id="next" class="next hidden">
-        <span class="next-label">Up next</span>
-        <span id="next-title" class="next-title"></span>
+      <div id="auth-needed" class="banner hidden">
+        This device isn't authorized. Open the <b>?token=…</b> link shown in the
+        Pi's logs, or paste the token here:
+        <div class="search" style="margin-top:0.6rem">
+          <input id="token-input" placeholder="token" />
+          <button id="token-btn">Save</button>
+        </div>
       </div>
-    </section>
 
-    <section class="right">
-      <div id="lyrics" class="lyrics"></div>
-      <div id="lyrics-empty" class="lyrics-empty hidden">No lyrics available</div>
-    </section>
-  </main>
+      <div id="no-record" class="banner hidden">
+        Recording must be done on the Raspberry Pi (no audio input detected).
+        You can still search and add albums.
+      </div>
+
+      <div class="search">
+        <input id="q" placeholder="Search an album to add…" autocomplete="off" />
+        <button id="search-btn">Search</button>
+      </div>
+      <div id="results"></div>
+
+      <h2 class="section">Your records (<span id="count">0</span>)</h2>
+      <div id="collection"></div>
+    </div>
+
+    <div id="rec-bar" class="rec-bar hidden">
+      <div class="dot"></div>
+      <div class="label">Recording <b id="rec-label"></b> — play the side from the start.</div>
+      <button id="stop-btn">Stop &amp; save</button>
+      <button id="cancel-btn" class="ghost">✕</button>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+  </section>
 
   <script src="/static/app.js"></script>
 </body>

@@ -1,22 +1,31 @@
 # Vinyl Display
 
-Recognize the record currently spinning on your turntable and show it on a
-screen attached to a Raspberry Pi: **now playing**, **up next**, album art, a
-progress bar, and **time-synced lyrics that scroll as the song plays**.
+Recognize the record currently spinning on your turntable and show it on any
+screen — **the Raspberry Pi listens and serves a web app; you open it on an
+iPad (or any browser) as the display**: **now playing**, **up next**, album art,
+a progress bar, and **time-synced lyrics that scroll as the song plays**.
 
-It works entirely from the audio coming off your turntable — no manual input,
-no tapping a phone. Recognition is **self-hosted and offline** (no accounts, no
-API keys, no per-play cost): it fingerprints against a database of *your own*
-records that you enroll once.
+It works entirely from the audio coming off your turntable — no manual input.
+Recognition is **self-hosted and offline** (no accounts, no API keys, no
+per-play cost): it fingerprints against a database of *your own* records that
+you enroll once.
+
+The web app has **two modes**, switched with a toggle at the top:
+
+- **Display** — the full-screen now-playing + lyrics view (your iPad screen).
+- **Collection** — search and add records from the web, and record their sides.
 
 ```
-┌─────────────────────────── Raspberry Pi ───────────────────────────┐
+┌─────────────────── Raspberry Pi (listener + server) ───────────────┐
 │  USB line-in ─► rolling audio buffer                                │
 │         └─► recognition loop ─► Olaf ─► {track, offset_in_track}    │
 │                   ├─► MusicBrainz + Cover Art  → tracklist, art      │
 │                   ├─► LRCLIB                    → synced lyrics      │
-│                   └─► state ── websocket ──► Chromium kiosk UI       │
-└─────────────────────────────────────────────────────────────────────┘
+│                   └─► state ── websocket ──┐                         │
+└────────────────────────────────────────────┼───────────────────────┘
+                                              ▼  Wi-Fi (LAN)
+                                  iPad / browser → web app
+                                  (Display ⇄ Collection modes)
 ```
 
 ## How it works
@@ -33,7 +42,9 @@ scrolling, re-syncing every ~20s to absorb turntable speed drift.
 
 ## Hardware
 
-- Raspberry Pi 4 / 5 + a screen (HDMI or the official touchscreen).
+- Raspberry Pi 4 / 5 (the listener + server).
+- **A screen = your iPad** (or any browser on the network). An HDMI screen on the
+  Pi is *optional* — the kiosk service can drive one too if you want.
 - A USB audio interface with **line-in and pass-through**, e.g. Behringer UCA202,
   so the record still plays to your speakers while the Pi listens.
 - A phono preamp **only if your turntable doesn't have one built in**.
@@ -56,9 +67,13 @@ record so you can see the whole UI):
 
 ```bash
 ./.venv/bin/python -m backend.main --simulate
-# open http://localhost:8080          (the kiosk display)
-# open http://localhost:8080/manage   (the phone companion app)
+# open http://localhost:8080  — toggle between Display and Collection at the top
 ```
+
+On your iPad, open `http://<pi-ip-address>:8080` (add it to the Home Screen for
+a full-screen, chrome-free display). The **Display** mode is the screen; switch
+to **Collection** to add records. `?mode=add` or `/manage` opens straight into
+Collection.
 
 Find your real audio device, then put it in `config.yaml`:
 
@@ -66,26 +81,19 @@ Find your real audio device, then put it in `config.yaml`:
 ./.venv/bin/python -m backend.main --list-devices
 ```
 
-## Adding records — from your phone
+## Adding records — Collection mode
 
-The backend also serves a **companion web app** for managing your collection.
-On any phone/laptop on the same network, open:
-
-```
-http://<pi-ip-address>:8080/manage
-```
-
-There you can **search an album**, **Add** it (its tracklist, synced lyrics, and
-cover art are fetched from the internet and cached on the Pi for offline use),
-and see your whole collection. Adding an album needs no audio — do it from the
-couch.
+Switch the web app to **Collection** mode (top toggle) from your iPad or any
+device on the network. There you can **search an album**, **Add** it (its
+tracklist, synced lyrics, and cover art are fetched from the internet and cached
+on the Pi for offline use), and see your whole collection. Adding an album needs
+no audio — do it from the couch.
 
 Each side then needs its fingerprint recorded **once, on the Pi** (that's where
-the turntable is). In the companion app, start the record playing from the
-beginning of a side and tap **Record side A**; a banner appears, and when the
-side finishes you tap **Stop & save**. The Pi fingerprints the whole side as one
-reference and works out each track's start time. A side shows a green ✓ once
-enrolled.
+the turntable is). Start the record playing from the beginning of a side and tap
+**Record side A**; a banner appears, and when the side finishes you tap **Stop &
+save**. The Pi fingerprints the whole side as one reference and works out each
+track's start time. A side shows a green ✓ once enrolled.
 
 > Recording the reference from your *own* turntable is what makes matching so
 > robust to vinyl noise and pitch.
@@ -106,13 +114,21 @@ if a record segues without gaps.
 ## Running on boot
 
 ```bash
-sudo cp systemd/*.service /etc/systemd/system/
-sudo systemctl enable --now vinyl-display.service vinyl-kiosk.service
+sudo cp systemd/vinyl-display.service /etc/systemd/system/
+sudo systemctl enable --now vinyl-display.service
 ```
 
-`vinyl-display.service` runs the backend; `vinyl-kiosk.service` waits for it and
-opens the UI fullscreen in Chromium. Both assume the repo at
-`/home/pi/vinyl-display` and user `pi` — edit the units if yours differ.
+`vinyl-display.service` runs the listener + web server — that's all you need when
+the **iPad is the screen**. If you *also* want an HDMI screen on the Pi itself,
+install the optional kiosk too:
+
+```bash
+sudo cp systemd/vinyl-kiosk.service /etc/systemd/system/
+sudo systemctl enable --now vinyl-kiosk.service   # opens /?mode=display fullscreen
+```
+
+Both assume the repo at `/home/pi/vinyl-display` and user `pi` — edit the units
+if yours differ.
 
 ## Configuration
 
@@ -173,9 +189,10 @@ backend/
   state.py           now-playing state + websocket fan-out
   server.py          kiosk page, /ws, /art, and the companion /api + /manage
 frontend/
-  index.html/app.js  kiosk UI (interpolated clock, art backdrop, synced lyrics)
-  manage.html/.js    phone companion app
-systemd/             backend + kiosk service units
+  index.html         single-page app: Display + Collection modes
+  app.js             mode switch, shared websocket, lyrics sync, collection mgmt
+  styles.css         display + collection styling (iPad-friendly, landscape/portrait)
+systemd/             backend service (+ optional HDMI kiosk)
 ```
 
 ## How recognition works (the clever bit)
