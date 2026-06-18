@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+import os
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -55,15 +56,16 @@ def create_app(state: StateManager, index: TrackIndex,
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
         return await call_next(request)
 
-    # ---- display (kiosk) ----
-    @app.get("/")
-    async def index_page() -> FileResponse:
-        return FileResponse(FRONTEND_DIR / "index.html")
+    # ---- built single-page app ----
+    web_dir = Path(os.environ.get("FRONTEND_DIST", FRONTEND_DIR / "dist"))
+    index_file = web_dir / "index.html"
 
     @app.get("/manage")
-    async def manage_page() -> FileResponse:
-        # Same single-page app; the frontend opens straight into Collection mode.
-        return FileResponse(FRONTEND_DIR / "index.html")
+    async def manage_page():
+        # Same SPA; the frontend opens straight into Collection mode.
+        if index_file.exists():
+            return FileResponse(index_file)
+        return JSONResponse({"error": "frontend not built"}, status_code=404)
 
     @app.get("/healthz")
     async def healthz() -> dict:
@@ -202,8 +204,12 @@ def create_app(state: StateManager, index: TrackIndex,
     art_path = Path(art_dir)
     art_path.mkdir(parents=True, exist_ok=True)
     app.mount("/art", StaticFiles(directory=str(art_path)), name="art")
-    if FRONTEND_DIR.exists():
-        app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+    # Serve the built SPA last so /api, /ws, /art, /manage take precedence.
+    # html=True serves index.html for "/" and the hashed assets, favicon,
+    # manifest, and the audio worklet straight from dist/.
+    if index_file.exists():
+        app.mount("/", StaticFiles(directory=str(web_dir), html=True), name="spa")
 
     return app
 

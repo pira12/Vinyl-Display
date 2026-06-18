@@ -1,0 +1,16 @@
+.git
+.venv
+venv
+__pycache__
+**/__pycache__
+*.pyc
+frontend/node_modules
+frontend/dist
+docs
+tests
+systemd
+scripts
+*.wav
+config.yaml
+auth_token.txt
+.DS_Store

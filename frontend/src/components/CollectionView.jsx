@@ -1,0 +1,227 @@
+import { useCallback, useEffect, useState } from "react";
+import { api, setToken, Unauthorized } from "../api.js";
+import AlbumCard from "./AlbumCard.jsx";
+import SettingsPanel from "./SettingsPanel.jsx";
+
+export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, toast }) {
+  const [albums, setAlbums] = useState([]);
+  const [canRecord, setCanRecord] = useState(false);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const [addingId, setAddingId] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+  const [target, setTarget] = useState(null); // { albumId, side } while enrolling
+  const [tokenInput, setTokenInput] = useState("");
+
+  const guard = useCallback(
+    async (fn) => {
+      try {
+        return await fn();
+      } catch (e) {
+        if (e instanceof Unauthorized) setAuthNeeded(true);
+        else toast(e.message || String(e));
+        return null;
+      }
+    },
+    [setAuthNeeded, toast]
+  );
+
+  const refresh = useCallback(async () => {
+    const data = await guard(() => api.get("/api/collection"));
+    if (!data) return;
+    setAlbums(data.albums || []);
+    setCanRecord(!!(data.recording && data.recording.can_record));
+  }, [guard]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function search() {
+    const q = query.trim();
+    if (!q) return;
+    setSearching(true);
+    const data = await guard(() => api.get("/api/search?q=" + encodeURIComponent(q)));
+    setSearching(false);
+    if (data) setResults(data.results || []);
+  }
+
+  async function addAlbum(mbid) {
+    setAddingId(mbid);
+    const res = await guard(() => api.postJson("/api/albums", { release_mbid: mbid }));
+    setAddingId("");
+    if (res && res.album) {
+      toast("Added " + res.album.title);
+      setResults((r) => (r ? r.filter((x) => x.release_mbid !== mbid) : r));
+      refresh();
+    }
+  }
+
+  async function onRecord(albumId, side) {
+    const ok = await mic.startEnroll(albumId, side);
+    if (ok) setTarget({ albumId, side });
+  }
+  async function stopRecord() {
+    const result = await mic.stopEnroll();
+    setTarget(null);
+    if (result) toast(`Saved side: ${result.tracks} tracks (${result.duration_s}s).`);
+    refresh();
+  }
+  async function cancelRecord() {
+    await mic.cancelEnroll();
+    setTarget(null);
+  }
+
+  function saveToken() {
+    setToken(tokenInput.trim());
+    setAuthNeeded(false);
+    refresh();
+  }
+
+  const listening = state ? state.listening !== false : mic.micActive;
+
+  return (
+    <div className="mx-auto max-w-[960px] px-4 pb-24 pt-[4.5rem]">
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <h1 className="text-2xl">🎶 My Vinyl Collection</h1>
+        <div className="flex gap-2">
+          <button
+            onClick={mic.toggleListening}
+            className={
+              "rounded-lg border px-3 py-2 text-sm font-semibold " +
+              (listening ? "border-[#2a2a33] bg-panel text-fg" : "border-transparent text-[#181400]")
+            }
+            style={listening ? undefined : { background: "var(--accent)" }}
+          >
+            {listening ? "Stop listening" : "Start listening"}
+          </button>
+          <button
+            onClick={() => setShowSettings((s) => !s)}
+            className="rounded-lg border border-[#2a2a33] bg-panel px-3 py-2 text-sm font-semibold text-fg"
+          >
+            ⚙ Settings
+          </button>
+        </div>
+      </div>
+
+      {authNeeded && (
+        <div className="mb-4 rounded-xl border border-[var(--accent)] bg-[#2a1f10] p-3 text-sm">
+          This device isn't authorized. Open the <b>?token=…</b> link from the server
+          logs, or paste the token:
+          <div className="mt-2 flex gap-2">
+            <input
+              className="flex-1 rounded-lg border border-[#2a2a33] bg-panel p-2.5 text-fg"
+              placeholder="token"
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+            />
+            <button
+              onClick={saveToken}
+              className="rounded-lg px-4 py-2 font-semibold text-[#181400]"
+              style={{ background: "var(--accent)" }}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showSettings && <SettingsPanel onToast={toast} />}
+
+      {!canRecord && (
+        <div className="mb-4 rounded-xl border border-[var(--accent)] bg-[#2a1f10] p-3 text-sm">
+          Recording is unavailable (the server has no Olaf backend). You can still
+          search and add albums.
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <input
+          className="flex-1 rounded-lg border border-[#2a2a33] bg-panel p-3"
+          placeholder="Search an album to add…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && search()}
+        />
+        <button
+          onClick={search}
+          className="rounded-lg px-4 py-3 font-semibold text-[#181400]"
+          style={{ background: "var(--accent)" }}
+        >
+          Search
+        </button>
+      </div>
+
+      {searching && <p className="mt-3 text-muted">Searching…</p>}
+      {results && !searching && (
+        <div className="mt-3 space-y-2">
+          {results.length === 0 && <p className="text-muted">No matches.</p>}
+          {results.map((r) => (
+            <div key={r.release_mbid} className="flex items-center gap-3 rounded-xl bg-panel p-3">
+              <img
+                src={r.art_url || undefined}
+                alt=""
+                className="h-14 w-14 rounded-lg bg-[#222] object-cover"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-semibold">{r.title}</div>
+                <div className="truncate text-sm text-muted">
+                  {r.artist}
+                  {r.year ? ` · ${r.year}` : ""}
+                  {r.tracks ? ` · ${r.tracks} trks` : ""}
+                </div>
+              </div>
+              <button
+                onClick={() => addAlbum(r.release_mbid)}
+                disabled={addingId === r.release_mbid}
+                className="flex items-center gap-2 rounded-lg px-4 py-2 font-semibold text-[#181400] disabled:opacity-60"
+                style={{ background: "var(--accent)" }}
+              >
+                {addingId === r.release_mbid && <span className="spinner h-4 w-4" />}
+                {addingId === r.release_mbid ? "Adding…" : "Add"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <h2 className="mb-3 mt-7 text-sm uppercase tracking-[0.08em] text-muted">
+        Your records ({albums.length})
+      </h2>
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+        {albums.map((a) => (
+          <AlbumCard
+            key={a.id}
+            album={a}
+            canRecord={canRecord}
+            busySide={target && target.albumId === a.id ? target.side : null}
+            onRecord={onRecord}
+          />
+        ))}
+      </div>
+
+      {target && (
+        <div className="fixed inset-x-0 bottom-0 z-[60] flex items-center gap-3 border-t border-[#7a2630] bg-[#3a0f12] px-4 py-3">
+          <div className="h-3 w-3 flex-none animate-pulse rounded-full bg-[#ff4d4d]" />
+          <div className="flex-1 text-sm">
+            Recording <b>side {target.side}</b> through the mic — play the side from the start.
+          </div>
+          <button
+            onClick={stopRecord}
+            className="rounded-lg px-4 py-2 font-semibold text-[#181400]"
+            style={{ background: "var(--accent)" }}
+          >
+            Stop &amp; save
+          </button>
+          <button
+            onClick={cancelRecord}
+            className="rounded-lg border border-[#2a2a33] bg-panel px-3 py-2 text-fg"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

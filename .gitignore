@@ -8,3 +8,7 @@ auth_token.txt
 .cache/
 db/index.json
 .DS_Store
+
+# frontend build
+frontend/node_modules/
+frontend/dist/
