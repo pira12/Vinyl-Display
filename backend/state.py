@@ -11,10 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Set
-
-from .recognition.models import TrackRef
 
 log = logging.getLogger(__name__)
 
@@ -28,7 +25,7 @@ class StateManager:
         self.speed_factor = speed_factor
 
         self.status: str = "idle"          # idle | listening | playing | unknown | error
-        self.track: Optional[TrackRef] = None
+        self.track: Optional[Dict[str, Any]] = None
         self.album: Dict[str, Any] = {}
         self.tracklist: List[Dict[str, Any]] = []
         self.current_index: Optional[int] = None
@@ -63,7 +60,7 @@ class StateManager:
 
     def set_now_playing(
         self,
-        track: TrackRef,
+        track: Dict[str, Any],
         album: Dict[str, Any],
         tracklist: List[Dict[str, Any]],
         current_index: Optional[int],
@@ -98,7 +95,7 @@ class StateManager:
             "updated_at": self.updated_at,
             "position_ms": self.position_ms,
             "speed_factor": self.speed_factor,
-            "track": asdict(self.track) if self.track else None,
+            "track": self.track,
             "album": self.album,
             "tracklist": self.tracklist,
             "current_index": self.current_index,

@@ -1,14 +1,17 @@
-"""FastAPI app: serves the kiosk frontend and a websocket of live state."""
+"""FastAPI app: the kiosk display, the live-state websocket, the cached album
+art, and the phone companion app + its JSON API."""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .enrollment import EnrollmentService
+from .recognition.models import TrackIndex
 from .state import StateManager
 
 log = logging.getLogger(__name__)
@@ -16,12 +19,18 @@ log = logging.getLogger(__name__)
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 
-def create_app(state: StateManager) -> FastAPI:
+def create_app(state: StateManager, index: TrackIndex,
+               enrollment: EnrollmentService, art_dir: str) -> FastAPI:
     app = FastAPI(title="Vinyl Display")
 
+    # ---- display (kiosk) ----
     @app.get("/")
-    async def index() -> FileResponse:  # noqa: D401
+    async def index_page() -> FileResponse:
         return FileResponse(FRONTEND_DIR / "index.html")
+
+    @app.get("/manage")
+    async def manage_page() -> FileResponse:
+        return FileResponse(FRONTEND_DIR / "manage.html")
 
     @app.get("/healthz")
     async def healthz() -> dict:
@@ -32,17 +41,76 @@ def create_app(state: StateManager) -> FastAPI:
         await websocket.accept()
         state.register(websocket)
         try:
-            await websocket.send_json(state.payload())   # prime the client
+            await websocket.send_json(state.payload())
             while True:
-                # We don't expect inbound messages; this keeps the socket open
-                # and lets us notice disconnects.
                 await websocket.receive_text()
         except WebSocketDisconnect:
             pass
         finally:
             state.unregister(websocket)
 
+    # ---- companion API ----
+    @app.get("/api/collection")
+    async def api_collection() -> JSONResponse:
+        return JSONResponse({
+            "albums": enrollment.collection(),
+            "recording": enrollment.recording_status(),
+        })
+
+    @app.get("/api/search")
+    async def api_search(q: str) -> JSONResponse:
+        return JSONResponse({"results": await enrollment.search(q)})
+
+    @app.post("/api/albums")
+    async def api_add_album(request: Request) -> JSONResponse:
+        body = await request.json()
+        mbid = (body or {}).get("release_mbid")
+        if not mbid:
+            return JSONResponse({"error": "release_mbid required"}, status_code=400)
+        try:
+            album = await enrollment.add_album(mbid)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"album": album, "sides": enrollment.sides_for(mbid)})
+
+    @app.post("/api/record/start")
+    async def api_record_start(request: Request) -> JSONResponse:
+        body = await request.json()
+        try:
+            enrollment.start_recording(body["album_id"], body.get("side", "A"))
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(enrollment.recording_status())
+
+    @app.post("/api/record/stop")
+    async def api_record_stop() -> JSONResponse:
+        try:
+            result = await _stop_recording(enrollment)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"result": result})
+
+    @app.post("/api/record/cancel")
+    async def api_record_cancel() -> JSONResponse:
+        enrollment.cancel_recording()
+        return JSONResponse(enrollment.recording_status())
+
+    @app.get("/api/record/status")
+    async def api_record_status() -> JSONResponse:
+        return JSONResponse(enrollment.recording_status())
+
+    # ---- static assets ----
+    art_path = Path(art_dir)
+    art_path.mkdir(parents=True, exist_ok=True)
+    app.mount("/art", StaticFiles(directory=str(art_path)), name="art")
     if FRONTEND_DIR.exists():
         app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
     return app
+
+
+async def _stop_recording(enrollment: EnrollmentService):
+    import asyncio
+
+    # Fingerprinting (olaf subprocess + WAV write) is blocking; offload it.
+    return await asyncio.to_thread(enrollment.stop_recording)

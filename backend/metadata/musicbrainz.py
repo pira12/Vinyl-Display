@@ -112,3 +112,26 @@ class MusicBrainzClient:
         if not data or not data.get("releases"):
             return None
         return data["releases"][0]["id"]
+
+    async def search_releases(self, query: str, limit: int = 12) -> List[Dict[str, Any]]:
+        """Free-text release search for the companion app (artist + album)."""
+        data = await self._get(
+            f"{MB_BASE}/release",
+            {"query": query, "fmt": "json", "limit": limit},
+        )
+        results: List[Dict[str, Any]] = []
+        for rel in (data or {}).get("releases", []):
+            artist = "".join(
+                ac.get("name", "") + ac.get("joinphrase", "")
+                for ac in rel.get("artist-credit", [])
+            )
+            results.append({
+                "release_mbid": rel["id"],
+                "title": rel.get("title", ""),
+                "artist": artist,
+                "year": (rel.get("date") or "")[:4],
+                "tracks": rel.get("track-count"),
+                "country": rel.get("country"),
+                "art_url": f"{CAA_BASE}/release/{rel['id']}/front-250",
+            })
+        return results

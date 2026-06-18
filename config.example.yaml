@@ -8,13 +8,15 @@ audio:
   buffer_seconds: 12      # length of the rolling audio buffer kept in memory
   query_seconds: 10       # how much recent audio to hand the recognizer per query
   silence_rms: 0.01       # input RMS below this counts as silence (needle up / gap)
+  tmp_dir: null           # scratch dir for the query WAV; null = RAM (/dev/shm)
 
 recognition:
   backend: olaf           # "olaf" for real fingerprinting, "mock" for development
   olaf_bin: olaf          # path to the olaf executable
   olaf_db: ~/.olaf/db     # olaf fingerprint database location
-  interval_seconds: 20    # how often to re-recognize / re-sync the play clock
-  min_match_score: 5      # minimum olaf match count to accept a result
+  interval_seconds: 20      # slow cadence: re-sync the play clock for drift
+  fast_interval_seconds: 3  # fast cadence: lock on quickly at track changes
+  min_match_score: 5        # minimum olaf match count to accept a result
 
 metadata:
   # MusicBrainz asks for a descriptive User-Agent with contact info. No account needed.

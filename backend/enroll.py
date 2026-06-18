@@ -1,18 +1,14 @@
-"""Enrollment — build the fingerprint database from your own records.
+"""Enrollment CLI (the companion app does the same thing from your phone).
 
-Recognition is offline and matches against *your* collection, so each record is
-enrolled once. Recording the reference from the same turntable makes the live
-match far more reliable than a clean digital copy.
+    # add an album's metadata (tracklist + lyrics + art), cached offline:
+    python -m backend.enroll album --release <RELEASE_MBID>
 
-Typical flow:
-
-    # 1. Record a side straight off the line-in (stop early with Ctrl-C):
+    # record a side off the line-in (Ctrl-C to stop), then fingerprint it:
     python -m backend.enroll record --out sideA.wav --minutes 25
-
-    # 2. Split it into tracks, fingerprint them, and tag from MusicBrainz:
     python -m backend.enroll add sideA.wav --release <RELEASE_MBID> --side A
 
-The split is by silence between bands; pass --tracks N if the auto-split is off.
+    # search MusicBrainz to find a release MBID:
+    python -m backend.enroll search "blood on the tracks dylan"
 """
 
 from __future__ import annotations
@@ -20,40 +16,44 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import re
-import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List
 
 import numpy as np
 
 from .config import load_config
+from .enrollment import EnrollmentService
+from .metadata.lyrics import LyricsClient
 from .metadata.musicbrainz import MusicBrainzClient
-from .recognition.models import TrackIndex, TrackRef
+from .recognition.models import TrackIndex
+from .recognition.olaf import OlafRecognizer
 
 log = logging.getLogger("enroll")
 
 
-def _slug(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+def _service(cfg) -> EnrollmentService:
+    db_dir = Path(cfg.recognition.olaf_db).parent
+    index = TrackIndex(str(db_dir / "index.json"))
+    backend = OlafRecognizer(cfg.recognition.olaf_bin, cfg.recognition.olaf_db)
+    mb = MusicBrainzClient(cfg.metadata.musicbrainz_useragent, cfg.metadata.cache_dir)
+    lyrics = LyricsClient(cfg.metadata.musicbrainz_useragent)
+    return EnrollmentService(cfg, index, backend, mb, lyrics,
+                             capture=None, art_dir=str(db_dir / "art"))
 
 
-# -- recording ---------------------------------------------------------------
 def record(out: str, minutes: float, cfg) -> None:
     import sounddevice as sd
     import soundfile as sf
 
-    sr = cfg.audio.samplerate
-    ch = cfg.audio.channels
-    frames = int(sr * minutes * 60)
+    sr, ch = cfg.audio.samplerate, cfg.audio.channels
     print(f"Recording up to {minutes:g} min to {out} — press Ctrl-C to stop early.")
     buf: List[np.ndarray] = []
     try:
         with sd.InputStream(device=cfg.audio.device, samplerate=sr, channels=ch,
                             dtype="float32") as stream:
-            captured = 0
-            while captured < frames:
-                block, _ = stream.read(sr)  # 1s blocks
+            captured, target = 0, int(sr * minutes * 60)
+            while captured < target:
+                block, _ = stream.read(sr)
                 buf.append(block.copy())
                 captured += len(block)
     except KeyboardInterrupt:
@@ -63,101 +63,30 @@ def record(out: str, minutes: float, cfg) -> None:
     print(f"Wrote {len(audio) / sr:.1f}s to {out}")
 
 
-# -- splitting ---------------------------------------------------------------
-def split_by_silence(
-    audio: np.ndarray,
-    sr: int,
-    silence_rms: float = 0.01,
-    min_silence_s: float = 1.5,
-    min_track_s: float = 30.0,
-) -> List[Tuple[float, float]]:
-    """Return (start_s, end_s) segments separated by sufficiently long silence."""
-    mono = audio.mean(axis=1) if audio.ndim > 1 else audio
-    win = int(sr * 0.1)  # 100ms windows
-    n_win = len(mono) // win
-    loud = np.array([
-        np.sqrt(np.mean(np.square(mono[i * win:(i + 1) * win]))) > silence_rms
-        for i in range(n_win)
-    ])
-
-    segments: List[Tuple[float, float]] = []
-    start: Optional[int] = None
-    silence_run = 0
-    min_silence_win = int(min_silence_s / 0.1)
-    for i, is_loud in enumerate(loud):
-        if is_loud:
-            if start is None:
-                start = i
-            silence_run = 0
-        else:
-            if start is not None:
-                silence_run += 1
-                if silence_run >= min_silence_win:
-                    end = i - silence_run
-                    if (end - start) * 0.1 >= min_track_s:
-                        segments.append((start * 0.1, end * 0.1))
-                    start = None
-                    silence_run = 0
-    if start is not None and (n_win - start) * 0.1 >= min_track_s:
-        segments.append((start * 0.1, n_win * 0.1))
-    return segments
+async def cmd_search(query: str, cfg) -> None:
+    svc = _service(cfg)
+    for r in await svc.search(query):
+        print(f"  {r['release_mbid']}  {r['artist']} — {r['title']} "
+              f"({r['year']}, {r.get('tracks')} trks, {r.get('country') or '?'})")
 
 
-# -- enrollment --------------------------------------------------------------
-async def add_side(wav: str, release_mbid: str, side: str, cfg,
-                   forced_tracks: Optional[int] = None) -> None:
+async def cmd_album(release: str, cfg) -> None:
+    svc = _service(cfg)
+    album = await svc.add_album(release)
+    print(f"Added: {album['artist']} — {album['title']} "
+          f"({album['track_count']} tracks). Sides: {svc.sides_for(release)}")
+
+
+async def cmd_add(wav: str, release: str, side: str, cfg) -> None:
     import soundfile as sf
 
-    from .recognition.olaf import OlafRecognizer
-
+    svc = _service(cfg)
+    if release not in svc.index.albums:
+        await svc.add_album(release)
     audio, sr = sf.read(wav, dtype="float32", always_2d=True)
-    segments = split_by_silence(audio, sr, silence_rms=cfg.audio.silence_rms)
-    print(f"Detected {len(segments)} track(s) in {wav}.")
-    if forced_tracks and len(segments) != forced_tracks:
-        print(f"WARNING: expected {forced_tracks}; auto-split found {len(segments)}. "
-              "Re-run with a tuned --silence/--min-gap if this is wrong.")
-
-    mb = MusicBrainzClient(cfg.metadata.musicbrainz_useragent, cfg.metadata.cache_dir)
-    release = await mb.get_release(release_mbid)
-    if not release:
-        print("Could not fetch release from MusicBrainz; aborting.", file=sys.stderr)
-        return
-
-    # Tracks on this side, in order.
-    side_tracks = [
-        t for t in release["tracklist"]
-        if str(t.get("position", "")).upper().startswith(side.upper())
-    ] or release["tracklist"]
-
-    index_path = Path(cfg.recognition.olaf_db).parent / "index.json"
-    index = TrackIndex(str(index_path))
-    olaf = OlafRecognizer(cfg.recognition.olaf_bin, cfg.recognition.olaf_db)
-    refs_dir = Path(cfg.recognition.olaf_db).parent / "refs"
-    refs_dir.mkdir(parents=True, exist_ok=True)
-
-    for i, (start_s, end_s) in enumerate(segments):
-        meta = side_tracks[i] if i < len(side_tracks) else {}
-        title = meta.get("title", f"{side}{i + 1}")
-        key = f"{_slug(release['title'])}-{_slug(str(meta.get('position') or side + str(i+1)))}"
-        ref_wav = refs_dir / f"{key}.wav"
-        sf.write(str(ref_wav), audio[int(start_s * sr):int(end_s * sr)], sr)
-        olaf.store(str(ref_wav))
-
-        index.add(TrackRef(
-            key=key,
-            title=title,
-            artist=release["artist"],
-            album=release["title"],
-            release_mbid=release_mbid,
-            recording_mbid=meta.get("recording_mbid"),
-            track_number=meta.get("number"),
-            position=meta.get("position"),
-            duration_ms=int((end_s - start_s) * 1000),
-        ))
-        print(f"  + {meta.get('position') or key}: {title}")
-
-    index.save()
-    print(f"Enrolled {len(segments)} track(s). Index: {index_path}")
+    result = svc.fingerprint_side(release, side, audio, sr)
+    print(f"Enrolled side {side}: {result['tracks']} tracks "
+          f"(offsets via {result['method']}).")
 
 
 def main() -> None:
@@ -166,24 +95,32 @@ def main() -> None:
     parser.add_argument("--config", default="config.yaml")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
+    p_s = sub.add_parser("search", help="search MusicBrainz for a release MBID")
+    p_s.add_argument("query")
+
+    p_al = sub.add_parser("album", help="cache an album's metadata/lyrics/art")
+    p_al.add_argument("--release", required=True)
+
     p_rec = sub.add_parser("record", help="record a side off the line-in")
     p_rec.add_argument("--out", required=True)
     p_rec.add_argument("--minutes", type=float, default=30.0)
 
-    p_add = sub.add_parser("add", help="split + fingerprint + tag a recorded side")
+    p_add = sub.add_parser("add", help="fingerprint a recorded side + tag it")
     p_add.add_argument("wav")
-    p_add.add_argument("--release", required=True, help="MusicBrainz release MBID")
+    p_add.add_argument("--release", required=True)
     p_add.add_argument("--side", default="A")
-    p_add.add_argument("--tracks", type=int, default=None,
-                       help="expected track count (sanity check)")
 
     args = parser.parse_args()
     cfg = load_config(args.config)
 
-    if args.cmd == "record":
+    if args.cmd == "search":
+        asyncio.run(cmd_search(args.query, cfg))
+    elif args.cmd == "album":
+        asyncio.run(cmd_album(args.release, cfg))
+    elif args.cmd == "record":
         record(args.out, args.minutes, cfg)
     elif args.cmd == "add":
-        asyncio.run(add_side(args.wav, args.release, args.side, cfg, args.tracks))
+        asyncio.run(cmd_add(args.wav, args.release, args.side, cfg))
 
 
 if __name__ == "__main__":

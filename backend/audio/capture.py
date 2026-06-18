@@ -36,6 +36,10 @@ class AudioCapture:
         self._lock = threading.Lock()
         self._stream = None
 
+        # Optional full-length recording (used to enroll a whole side).
+        self._recording = False
+        self._rec_chunks: list = []
+
     # -- lifecycle -----------------------------------------------------------
     def start(self) -> None:
         import sounddevice as sd  # lazy: only needed for real capture
@@ -62,6 +66,8 @@ class AudioCapture:
     def _write(self, data: np.ndarray) -> None:
         n = len(data)
         with self._lock:
+            if self._recording:
+                self._rec_chunks.append(data.copy())
             end = self._write_pos + n
             if end <= self._frames:
                 self._buffer[self._write_pos:end] = data
@@ -87,6 +93,25 @@ class AudioCapture:
                     [self._buffer[start:], self._buffer[: want - first]]
                 )
         return out
+
+    # -- full-side recording -------------------------------------------------
+    def start_recording(self) -> None:
+        with self._lock:
+            self._rec_chunks = []
+            self._recording = True
+
+    def stop_recording(self) -> np.ndarray:
+        with self._lock:
+            self._recording = False
+            chunks = self._rec_chunks
+            self._rec_chunks = []
+        if not chunks:
+            return np.zeros((0, self.channels), dtype=np.float32)
+        return np.concatenate(chunks)
+
+    @property
+    def is_recording(self) -> bool:
+        return self._recording
 
     def rms(self, seconds: float = 1.0) -> float:
         """Root-mean-square level of the most recent audio (0..~1)."""

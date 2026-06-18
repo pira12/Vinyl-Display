@@ -3,6 +3,7 @@
 // the progress bar and synced lyrics stay smooth without constant server traffic.
 
 const els = {
+  backdrop: document.getElementById("backdrop"),
   overlay: document.getElementById("overlay"),
   overlayText: document.getElementById("overlay-text"),
   now: document.getElementById("now"),
@@ -47,13 +48,7 @@ function renderTrack() {
   const parts = [a.title, a.year].filter(Boolean);
   els.album.textContent = parts.join(" · ") || "";
 
-  if (a.art_url) {
-    els.art.src = a.art_url;
-    els.art.style.visibility = "visible";
-  } else {
-    els.art.removeAttribute("src");
-    els.art.style.visibility = "hidden";
-  }
+  setArtwork(a.art_url);
   els.duration.textContent = fmt(t.duration_ms);
 
   if (state.next_track && state.next_track.title) {
@@ -64,6 +59,58 @@ function renderTrack() {
   }
 
   renderLyrics();
+}
+
+// Swap album art with a crossfade, update the blurred backdrop, and theme the
+// accent color from the artwork — all same-origin (/art) so the canvas is clean.
+function setArtwork(url) {
+  if (!url) {
+    els.art.removeAttribute("src");
+    els.art.style.visibility = "hidden";
+    els.backdrop.classList.remove("show");
+    return;
+  }
+  els.art.classList.add("fade-out");
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    els.art.src = url;
+    els.art.style.visibility = "visible";
+    els.art.classList.remove("fade-out");
+    els.backdrop.style.backgroundImage = `url("${url}")`;
+    els.backdrop.classList.add("show");
+    applyAccent(img);
+  };
+  img.onerror = () => {
+    els.art.style.visibility = "hidden";
+    els.art.classList.remove("fade-out");
+  };
+  img.src = url;
+}
+
+function applyAccent(img) {
+  try {
+    const c = document.createElement("canvas");
+    const n = 16;
+    c.width = n; c.height = n;
+    const ctx = c.getContext("2d");
+    ctx.drawImage(img, 0, 0, n, n);
+    const data = ctx.getImageData(0, 0, n, n).data;
+    let best = null, bestScore = -1;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      const sat = max === 0 ? 0 : (max - min) / max;
+      const score = sat * (max / 255);          // vibrant but not too dark
+      if (max > 40 && score > bestScore) { bestScore = score; best = [r, g, b]; }
+    }
+    if (best) {
+      document.documentElement.style.setProperty(
+        "--accent", `rgb(${best[0]}, ${best[1]}, ${best[2]})`);
+    }
+  } catch (e) {
+    /* canvas blocked — keep the default accent */
+  }
 }
 
 function renderLyrics() {
