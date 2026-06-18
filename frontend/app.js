@@ -109,9 +109,11 @@ function updateLyricScroll(pos) {
     const el = lineEls[idx];
     el.classList.add("active");
     el.classList.remove("passed");
-    // Center the active line within the lyrics viewport.
+    // Keep the active line a little above the vertical centre (like Spotify),
+    // leaving more room for the lines coming up.
     const container = els.lyrics.parentElement;
-    const offset = el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
+    const anchor = container.clientHeight * 0.42;
+    const offset = el.offsetTop - anchor + el.clientHeight / 2;
     els.lyrics.style.transform = `translateY(${-offset}px)`;
   }
 }

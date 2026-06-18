@@ -94,19 +94,23 @@ html, body {
           mask-image: linear-gradient(transparent, #000 18%, #000 82%, transparent);
 }
 .lyrics {
-  display: flex; flex-direction: column; gap: 1.1rem;
-  transition: transform 0.4s ease;
+  display: flex; flex-direction: column; gap: 1.3rem;
+  /* spring-like ease so the scroll glides like Spotify's */
+  transition: transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
   will-change: transform;
 }
 .lyrics .line {
-  font-size: 1.9rem; line-height: 1.25;
-  color: #54514a;
-  transition: color 0.3s ease, opacity 0.3s ease;
+  font-size: 2.1rem; line-height: 1.22; font-weight: 700;
+  /* Spotify look: all lines bold, inactive ones dimmed translucent. */
+  color: rgba(244, 241, 234, 0.32);
+  transform-origin: left center;
+  transition: color 0.35s ease, opacity 0.35s ease, transform 0.35s ease;
 }
 .lyrics .line.active {
   color: var(--fg);
+  transform: scale(1.04);          /* subtle pop on the current line */
 }
-.lyrics .line.passed { color: #3a3833; }
+.lyrics .line.passed { color: rgba(244, 241, 234, 0.22); }
 .lyrics-empty {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
