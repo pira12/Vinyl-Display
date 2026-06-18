@@ -14,6 +14,28 @@ sudo apt-get install -y \
   chromium-browser curl \
   build-essential cmake   # needed to build olaf
 
+echo "==> Installing Zig (needed to build Olaf)"
+# Olaf builds with Zig (build.zig.zon requires >= 0.16.0), which is not in apt.
+# Grab the official prebuilt for this machine's architecture.
+ZIG_VERSION="0.16.0"
+if ! command -v zig >/dev/null 2>&1; then
+  case "$(uname -m)" in
+    x86_64)  ZIG_ARCH="x86_64" ;;
+    aarch64) ZIG_ARCH="aarch64" ;;
+    armv7l)  ZIG_ARCH="arm" ;;
+    *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+  ztmp="$(mktemp -d)"
+  curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}.tar.xz" \
+    | tar -xJ -C "$ztmp"
+  sudo rm -rf /opt/zig
+  sudo mv "$ztmp/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}" /opt/zig
+  sudo ln -sf /opt/zig/zig /usr/local/bin/zig
+  rm -rf "$ztmp"
+else
+  echo "    zig already installed, skipping."
+fi
+
 echo "==> Building Olaf (self-hosted fingerprinter)"
 if ! command -v olaf >/dev/null 2>&1; then
   tmp="$(mktemp -d)"
