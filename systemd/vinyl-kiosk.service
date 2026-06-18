@@ -15,7 +15,7 @@ ExecStart=/usr/bin/chromium-browser \
   --disable-infobars \
   --incognito \
   --check-for-update-interval=31536000 \
-  http://localhost:8080
+  http://localhost:8080/?mode=display
 Restart=on-failure
 RestartSec=3
 

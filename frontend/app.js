@@ -1,36 +1,82 @@
-// Vinyl Display frontend.
-// Receives state over the websocket and runs its own clock between updates so
-// the progress bar and synced lyrics stay smooth without constant server traffic.
+// Vinyl Display — one web app, two modes:
+//   • display    : full-screen now-playing + synced lyrics (the iPad "screen")
+//   • add        : browse/add the collection and remote-record sides
+// A single read-only websocket feeds the live state to both modes.
 
-const els = {
-  backdrop: document.getElementById("backdrop"),
-  overlay: document.getElementById("overlay"),
-  overlayText: document.getElementById("overlay-text"),
-  now: document.getElementById("now"),
-  art: document.getElementById("art"),
-  title: document.getElementById("title"),
-  artist: document.getElementById("artist"),
-  album: document.getElementById("album"),
-  barFill: document.getElementById("bar-fill"),
-  elapsed: document.getElementById("elapsed"),
-  duration: document.getElementById("duration"),
-  next: document.getElementById("next"),
-  nextTitle: document.getElementById("next-title"),
-  lyrics: document.getElementById("lyrics"),
-  lyricsEmpty: document.getElementById("lyrics-empty"),
+const $ = (id) => document.getElementById(id);
+const body = document.body;
+
+// ---------- mode switching ----------
+function initialMode() {
+  const p = new URLSearchParams(location.search).get("mode");
+  if (p === "add" || p === "display") return p;
+  if (location.pathname === "/manage") return "add";
+  return localStorage.getItem("vinyl_mode") || "display";
+}
+
+function setMode(mode) {
+  body.dataset.mode = mode;
+  localStorage.setItem("vinyl_mode", mode);
+  document.querySelectorAll("#modebar button").forEach((b) =>
+    b.classList.toggle("active", b.dataset.target === mode));
+  if (mode === "add") loadCollection();
+  showControls();
+}
+
+document.querySelectorAll("#modebar button").forEach((b) =>
+  (b.onclick = () => setMode(b.dataset.target)));
+
+// Auto-hide the mode switch in display mode after inactivity.
+let hideTimer;
+function showControls() {
+  body.classList.remove("controls-hidden");
+  clearTimeout(hideTimer);
+  if (body.dataset.mode === "display")
+    hideTimer = setTimeout(() => body.classList.add("controls-hidden"), 4000);
+}
+["pointerdown", "mousemove", "keydown"].forEach((e) =>
+  document.addEventListener(e, showControls, { passive: true }));
+
+// ---------- token auth (only needed for /api in add mode) ----------
+function loadToken() {
+  const url = new URL(location.href);
+  const fromUrl = url.searchParams.get("token");
+  if (fromUrl) {
+    localStorage.setItem("vinyl_token", fromUrl);
+    url.searchParams.delete("token");
+    history.replaceState({}, "", url.pathname + url.search);
+  }
+  return localStorage.getItem("vinyl_token") || "";
+}
+let token = loadToken();
+
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({ "X-Auth-Token": token }, opts.headers || {});
+  const res = await fetch(path, opts);
+  if (res.status === 401) {
+    $("auth-needed").classList.remove("hidden");
+    throw new Error("unauthorized");
+  }
+  return res.json();
+}
+
+$("token-btn").onclick = () => {
+  token = $("token-input").value.trim();
+  localStorage.setItem("vinyl_token", token);
+  $("auth-needed").classList.add("hidden");
+  loadCollection();
 };
 
+// ---------- shared live state ----------
 let state = null;
-let lineEls = [];      // rendered lyric line elements
+let lineEls = [];
 let activeLine = -1;
 
 function fmt(ms) {
-  if (!ms || ms < 0) ms = 0;
-  const s = Math.floor(ms / 1000);
+  const s = Math.max(0, Math.floor((ms || 0) / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-// Position now, interpolated from the last server sync.
 function currentPosition() {
   if (!state || state.status !== "playing") return 0;
   const drift = (Date.now() - state.updated_at) * (state.speed_factor || 1);
@@ -40,59 +86,72 @@ function currentPosition() {
   return Math.max(0, pos);
 }
 
-function renderTrack() {
-  const t = state.track || {};
-  const a = state.album || {};
-  els.title.textContent = t.title || "—";
-  els.artist.textContent = t.artist || a.artist || "—";
-  const parts = [a.title, a.year].filter(Boolean);
-  els.album.textContent = parts.join(" · ") || "";
+function applyState(next) {
+  const changed =
+    !state || !state.track || !next.track ||
+    (state.track && next.track && state.track.title !== next.track.title) ||
+    (!!state.track !== !!next.track);
+  state = next;
 
+  // display mode
+  if (state.status === "playing" && state.track) {
+    $("overlay").classList.add("hidden");
+    $("now").classList.remove("hidden");
+    if (changed) renderTrack();
+  } else {
+    $("now").classList.add("hidden");
+    $("overlay").classList.remove("hidden");
+    $("overlay-text").textContent =
+      state.status === "unknown" ? "Unknown record" :
+      state.status === "listening" ? "Listening…" : "Waiting for a record…";
+  }
+  renderNowPlayingBar();
+}
+
+// ---------- display rendering ----------
+function renderTrack() {
+  const t = state.track || {}, a = state.album || {};
+  $("title").textContent = t.title || "—";
+  $("artist").textContent = t.artist || a.artist || "—";
+  $("album").textContent = [a.title, a.year].filter(Boolean).join(" · ") || "";
   setArtwork(a.art_url);
-  els.duration.textContent = fmt(t.duration_ms);
+  $("duration").textContent = fmt(t.duration_ms);
 
   if (state.next_track && state.next_track.title) {
-    els.nextTitle.textContent = state.next_track.title;
-    els.next.classList.remove("hidden");
+    $("next-title").textContent = state.next_track.title;
+    $("next").classList.remove("hidden");
   } else {
-    els.next.classList.add("hidden");
+    $("next").classList.add("hidden");
   }
-
   renderLyrics();
 }
 
-// Swap album art with a crossfade, update the blurred backdrop, and theme the
-// accent color from the artwork — all same-origin (/art) so the canvas is clean.
 function setArtwork(url) {
   if (!url) {
-    els.art.removeAttribute("src");
-    els.art.style.visibility = "hidden";
-    els.backdrop.classList.remove("show");
+    $("art").removeAttribute("src");
+    $("art").style.visibility = "hidden";
+    $("backdrop").classList.remove("show");
     return;
   }
-  els.art.classList.add("fade-out");
+  $("art").classList.add("fade-out");
   const img = new Image();
   img.crossOrigin = "anonymous";
   img.onload = () => {
-    els.art.src = url;
-    els.art.style.visibility = "visible";
-    els.art.classList.remove("fade-out");
-    els.backdrop.style.backgroundImage = `url("${url}")`;
-    els.backdrop.classList.add("show");
+    $("art").src = url;
+    $("art").style.visibility = "visible";
+    $("art").classList.remove("fade-out");
+    $("backdrop").style.backgroundImage = `url("${url}")`;
+    $("backdrop").classList.add("show");
     applyAccent(img);
   };
-  img.onerror = () => {
-    els.art.style.visibility = "hidden";
-    els.art.classList.remove("fade-out");
-  };
+  img.onerror = () => { $("art").style.visibility = "hidden"; $("art").classList.remove("fade-out"); };
   img.src = url;
 }
 
 function applyAccent(img) {
   try {
     const c = document.createElement("canvas");
-    const n = 16;
-    c.width = n; c.height = n;
+    const n = 16; c.width = n; c.height = n;
     const ctx = c.getContext("2d");
     ctx.drawImage(img, 0, 0, n, n);
     const data = ctx.getImageData(0, 0, n, n).data;
@@ -101,52 +160,37 @@ function applyAccent(img) {
       const r = data[i], g = data[i + 1], b = data[i + 2];
       const max = Math.max(r, g, b), min = Math.min(r, g, b);
       const sat = max === 0 ? 0 : (max - min) / max;
-      const score = sat * (max / 255);          // vibrant but not too dark
+      const score = sat * (max / 255);
       if (max > 40 && score > bestScore) { bestScore = score; best = [r, g, b]; }
     }
-    if (best) {
-      document.documentElement.style.setProperty(
-        "--accent", `rgb(${best[0]}, ${best[1]}, ${best[2]})`);
-    }
-  } catch (e) {
-    /* canvas blocked — keep the default accent */
-  }
+    if (best) document.documentElement.style.setProperty("--accent", `rgb(${best[0]},${best[1]},${best[2]})`);
+  } catch (e) { /* canvas blocked — keep default accent */ }
 }
 
 function renderLyrics() {
-  els.lyrics.innerHTML = "";
-  lineEls = [];
-  activeLine = -1;
+  $("lyrics").innerHTML = "";
+  lineEls = []; activeLine = -1;
   const lyr = state.lyrics || { synced: false, lines: [] };
-  els.lyrics.classList.toggle("plain", !lyr.synced);
-
-  if (!lyr.lines || lyr.lines.length === 0) {
-    els.lyricsEmpty.classList.remove("hidden");
-    return;
-  }
-  els.lyricsEmpty.classList.add("hidden");
-
+  $("lyrics").classList.toggle("plain", !lyr.synced);
+  if (!lyr.lines || !lyr.lines.length) { $("lyrics-empty").classList.remove("hidden"); return; }
+  $("lyrics-empty").classList.add("hidden");
   for (const line of lyr.lines) {
     const div = document.createElement("div");
     div.className = "line";
-    div.textContent = line.text || " ";
-    div.dataset.t = line.t == null ? "" : line.t;
-    els.lyrics.appendChild(div);
+    div.textContent = line.text || " ";
+    $("lyrics").appendChild(div);
     lineEls.push(div);
   }
 }
 
 function updateLyricScroll(pos) {
   const lyr = state.lyrics;
-  if (!lyr || !lyr.synced || lineEls.length === 0) return;
-
+  if (!lyr || !lyr.synced || !lineEls.length) return;
   let idx = -1;
   for (let i = 0; i < lyr.lines.length; i++) {
-    if (lyr.lines[i].t != null && lyr.lines[i].t <= pos) idx = i;
-    else break;
+    if (lyr.lines[i].t != null && lyr.lines[i].t <= pos) idx = i; else break;
   }
   if (idx === activeLine) return;
-
   if (activeLine >= 0 && lineEls[activeLine]) {
     lineEls[activeLine].classList.remove("active");
     lineEls[activeLine].classList.add("passed");
@@ -154,54 +198,37 @@ function updateLyricScroll(pos) {
   activeLine = idx;
   if (idx >= 0 && lineEls[idx]) {
     const el = lineEls[idx];
-    el.classList.add("active");
-    el.classList.remove("passed");
-    // Keep the active line a little above the vertical centre (like Spotify),
-    // leaving more room for the lines coming up.
-    const container = els.lyrics.parentElement;
+    el.classList.add("active"); el.classList.remove("passed");
+    const container = $("lyrics").parentElement;
     const anchor = container.clientHeight * 0.42;
-    const offset = el.offsetTop - anchor + el.clientHeight / 2;
-    els.lyrics.style.transform = `translateY(${-offset}px)`;
+    $("lyrics").style.transform = `translateY(${-(el.offsetTop - anchor + el.clientHeight / 2)}px)`;
   }
 }
 
-function showOverlay(text) {
-  els.overlayText.textContent = text;
-  els.overlay.classList.remove("hidden");
-  els.now.classList.add("hidden");
-}
-
-function showNow() {
-  els.overlay.classList.add("hidden");
-  els.now.classList.remove("hidden");
-}
-
-function applyState(next) {
-  const trackChanged =
-    !state || !state.track || !next.track ||
-    (state.track && next.track && state.track.key !== next.track.key) ||
-    (!!state.track !== !!next.track);
-  state = next;
-
-  if (state.status === "playing" && state.track) {
-    showNow();
-    if (trackChanged) renderTrack();
-  } else if (state.status === "unknown") {
-    showOverlay("Unknown record");
-  } else if (state.status === "listening") {
-    showOverlay("Listening…");
+function renderNowPlayingBar() {
+  const np = $("np");
+  if (state && state.status === "playing" && state.track) {
+    np.classList.remove("hidden");
+    $("np-title").textContent = state.track.title || "";
+    $("np-sub").textContent = (state.track.artist || "") +
+      (state.album && state.album.title ? " · " + state.album.title : "");
+    const art = state.album && state.album.art_url;
+    if (art) { $("np-art").src = art; $("np-art").style.visibility = "visible"; }
+    else { $("np-art").style.visibility = "hidden"; }
   } else {
-    showOverlay("Waiting for a record…");
+    np.classList.add("hidden");
   }
 }
 
-// Animation loop: progress bar + lyric highlight.
+// animation loop: progress bars + lyric highlight
 function tick() {
   if (state && state.status === "playing" && state.track) {
     const pos = currentPosition();
     const dur = state.track.duration_ms || 0;
-    els.elapsed.textContent = fmt(pos);
-    els.barFill.style.width = dur ? `${Math.min(100, (pos / dur) * 100)}%` : "0%";
+    const pct = dur ? `${Math.min(100, (pos / dur) * 100)}%` : "0%";
+    $("elapsed").textContent = fmt(pos);
+    $("bar-fill").style.width = pct;
+    $("np-fill").style.width = pct;
     updateLyricScroll(pos);
   }
   requestAnimationFrame(tick);
@@ -211,12 +238,140 @@ function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.onmessage = (ev) => applyState(JSON.parse(ev.data));
-  ws.onclose = () => {
-    showOverlay("Reconnecting…");
-    setTimeout(connect, 1500);
-  };
+  ws.onclose = () => setTimeout(connect, 1500);
   ws.onerror = () => ws.close();
 }
 
+// ---------- collection mode ----------
+let canRecord = false;
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg; t.classList.remove("hidden");
+  setTimeout(() => t.classList.add("hidden"), 3500);
+}
+
+function sidesOf(a) {
+  const set = [];
+  for (const t of a.tracklist || []) {
+    const p = (t.position || "").trim();
+    if (p && /[A-Za-z]/.test(p[0]) && !set.includes(p[0].toUpperCase())) set.push(p[0].toUpperCase());
+  }
+  return set.length ? set : ["A"];
+}
+
+function albumCard(a) {
+  const card = document.createElement("div");
+  card.className = "card";
+  const img = document.createElement("img");
+  if (a.art_url) img.src = a.art_url;
+  card.appendChild(img);
+  const info = document.createElement("div");
+  info.className = "info";
+  info.innerHTML = `<div class="title">${a.title}</div>` +
+    `<div class="sub">${a.artist}${a.year ? " · " + a.year : ""} · ${a.track_count} tracks</div>`;
+  const sidesRow = document.createElement("div");
+  sidesRow.className = "sides";
+  for (const side of sidesOf(a)) {
+    const done = (a.enrolled_sides || []).includes(side);
+    const btn = document.createElement("button");
+    btn.className = "side-btn" + (done ? " done" : "");
+    btn.textContent = done ? `Side ${side} ✓` : `Record side ${side}`;
+    btn.disabled = !canRecord;
+    btn.onclick = () => startRecording(a.id, side);
+    sidesRow.appendChild(btn);
+  }
+  info.appendChild(sidesRow);
+  card.appendChild(info);
+  return card;
+}
+
+async function loadCollection() {
+  let data;
+  try { data = await api("/api/collection"); } catch (e) { return; }
+  canRecord = !!(data.recording && data.recording.can_record);
+  $("no-record").classList.toggle("hidden", canRecord);
+  const list = $("collection");
+  list.innerHTML = "";
+  for (const a of data.albums) list.appendChild(albumCard(a));
+  $("count").textContent = data.albums.length;
+  if (data.recording && data.recording.recording && data.recording.session)
+    showRecBar(data.recording.session.side);
+}
+
+async function search() {
+  const q = $("q").value.trim();
+  if (!q) return;
+  $("results").innerHTML = '<p class="muted">Searching…</p>';
+  let data;
+  try { data = await api("/api/search?q=" + encodeURIComponent(q)); } catch (e) { return; }
+  const box = $("results"); box.innerHTML = "";
+  for (const r of data.results) {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `<img ${r.art_url ? `src="${r.art_url}"` : ""}/>` +
+      `<div class="info"><div class="title">${r.title}</div>` +
+      `<div class="sub">${r.artist}${r.year ? " · " + r.year : ""}` +
+      `${r.tracks ? " · " + r.tracks + " trks" : ""}${r.country ? " · " + r.country : ""}</div></div>`;
+    const add = document.createElement("button");
+    add.textContent = "Add";
+    add.onclick = async () => {
+      add.disabled = true; add.textContent = "Adding…";
+      let res;
+      try {
+        res = await api("/api/albums", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ release_mbid: r.release_mbid }),
+        });
+      } catch (e) { return; }
+      if (res.error) { toast("Error: " + res.error); add.disabled = false; add.textContent = "Add"; return; }
+      toast("Added " + res.album.title);
+      card.remove(); loadCollection();
+    };
+    card.appendChild(add);
+    box.appendChild(card);
+  }
+  if (!data.results.length) box.innerHTML = '<p class="muted">No matches.</p>';
+}
+
+let recSide = null;
+function showRecBar(side) { recSide = side; $("rec-label").textContent = "side " + side; $("rec-bar").classList.remove("hidden"); }
+
+async function startRecording(albumId, side) {
+  let res;
+  try {
+    res = await api("/api/record/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ album_id: albumId, side }),
+    });
+  } catch (e) { return; }
+  if (res.error) { toast("Error: " + res.error); return; }
+  showRecBar(side);
+}
+
+async function stopRecording() {
+  $("stop-btn").disabled = true; $("stop-btn").textContent = "Saving…";
+  let res;
+  try { res = await api("/api/record/stop", { method: "POST" }); }
+  finally { $("stop-btn").disabled = false; $("stop-btn").textContent = "Stop & save"; }
+  $("rec-bar").classList.add("hidden");
+  if (res.error) { toast("Error: " + res.error); return; }
+  const r = res.result || {};
+  toast(`Saved side ${recSide}: ${r.tracks} tracks (${r.duration_s}s).`);
+  loadCollection();
+}
+
+async function cancelRecording() {
+  try { await api("/api/record/cancel", { method: "POST" }); } catch (e) {}
+  $("rec-bar").classList.add("hidden");
+}
+
+$("search-btn").onclick = search;
+$("q").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
+$("stop-btn").onclick = stopRecording;
+$("cancel-btn").onclick = cancelRecording;
+
+// ---------- boot ----------
+setMode(initialMode());
 connect();
 requestAnimationFrame(tick);

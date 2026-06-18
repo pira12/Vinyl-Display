@@ -48,7 +48,8 @@ def create_app(state: StateManager, index: TrackIndex,
 
     @app.get("/manage")
     async def manage_page() -> FileResponse:
-        return FileResponse(FRONTEND_DIR / "manage.html")
+        # Same single-page app; the frontend opens straight into Collection mode.
+        return FileResponse(FRONTEND_DIR / "index.html")
 
     @app.get("/healthz")
     async def healthz() -> dict:
