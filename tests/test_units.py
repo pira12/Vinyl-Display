@@ -17,6 +17,22 @@ def test_config_defaults():
     assert cfg.recognition.fast_interval_seconds == 3.0
 
 
+def test_config_loads_nested_sections(tmp_path):
+    import yaml
+
+    p = tmp_path / "c.yaml"
+    p.write_text(yaml.safe_dump({
+        "audio": {"device": 2, "silence_rms": 0.05},
+        "server": {"port": 9000},
+    }))
+    cfg = load_config(str(p))
+    # Nested sections must become typed dataclasses, not raw dicts.
+    assert cfg.audio.device == 2
+    assert cfg.audio.silence_rms == 0.05
+    assert cfg.server.port == 9000
+    assert cfg.recognition.backend == "olaf"   # unspecified key keeps its default
+
+
 def test_parse_lrc_sorts_and_converts():
     lines = parse_lrc("[00:01.00]first\n[00:03.50]second\n[00:00.00]intro")
     assert [l["t"] for l in lines] == [0, 1000, 3500]

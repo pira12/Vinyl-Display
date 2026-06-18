@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, get_type_hints
 
 import yaml
 
@@ -87,13 +87,17 @@ class Config:
 def _build(cls: type, data: Optional[dict]) -> Any:
     """Instantiate a (possibly nested) dataclass from a plain dict."""
     data = data or {}
+    # ``from __future__ import annotations`` makes ``f.type`` a string, so
+    # resolve the real types here to detect nested dataclass sections.
+    hints = get_type_hints(cls)
     kwargs = {}
     for f in fields(cls):
         if f.name not in data:
             continue
         value = data[f.name]
-        if is_dataclass(f.type) and isinstance(value, dict):
-            kwargs[f.name] = _build(f.type, value)
+        ftype = hints.get(f.name, f.type)
+        if is_dataclass(ftype) and isinstance(value, dict):
+            kwargs[f.name] = _build(ftype, value)
         else:
             kwargs[f.name] = value
     return cls(**kwargs)
