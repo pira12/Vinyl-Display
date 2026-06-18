@@ -70,6 +70,8 @@ class PlaybackConfig:
 class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8080
+    require_auth: bool = True          # protect the companion API with a token
+    auth_token: Optional[str] = None   # set one, or let it auto-generate on first run
 
 
 @dataclass

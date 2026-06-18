@@ -125,6 +125,32 @@ knobs:
 - `recognition.fast_interval_seconds` — fast cadence used to lock on at track changes.
 - `playback.speed_factor` — turntable speed correction (e.g. `33.4/33.33`).
 
+## Security
+
+The companion API can **start audio capture from your turntable**, so it's
+treated as a control surface, not just a viewer:
+
+- **Token auth on `/api`.** Every management/control call requires a token
+  (`X-Auth-Token` header or `?token=`). On first run a random token is generated,
+  saved to `auth_token.txt` next to the database (mode `600`), and logged as a
+  `/manage?token=…` link. Open that once on your phone — the token is stored in
+  the browser and stripped from the URL. Set a fixed `server.auth_token` in the
+  config to pin it. Comparisons use `hmac.compare_digest` (constant-time).
+- **The display stays open.** `/`, `/ws`, and `/art` are read-only and need no
+  token, so the kiosk and the phone's now-playing bar work without one. Only the
+  collection/recording API is gated.
+- **Input validation.** Release IDs are validated as MusicBrainz UUIDs before
+  they ever touch a file path or index key (prevents path traversal); API bodies
+  are checked and fail closed with `400`. The app fetches only MusicBrainz/LRCLIB
+  /Cover-Art URLs it constructs itself — no user-supplied URLs (no SSRF surface).
+- **Least-privilege service.** `systemd/vinyl-display.service` runs as a normal
+  user with `NoNewPrivileges`, `ProtectSystem=strict`, read-only home, an
+  explicit `ReadWritePaths` allow-list, and `PrivateTmp`.
+- **Network exposure.** It binds `0.0.0.0` so your phone can reach it; set
+  `server.host: 127.0.0.1` to keep it Pi-only, or add a firewall rule limiting
+  tcp/8080 to your LAN (`ufw allow from 192.168.0.0/16 to any port 8080`). Don't
+  port-forward it to the public internet.
+
 ## Project layout
 
 ```

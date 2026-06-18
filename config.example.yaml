@@ -30,5 +30,8 @@ playback:
   speed_factor: 1.0       # turntable speed correction (e.g. 33.4 / 33.33 = 1.002)
 
 server:
-  host: 0.0.0.0
+  host: 0.0.0.0           # bind address; use 127.0.0.1 to keep it Pi-only
   port: 8080
+  require_auth: true      # protect the companion API (/api) with a token
+  auth_token: null        # set a fixed token, or null to auto-generate one
+                          # (saved next to the DB as auth_token.txt and logged)

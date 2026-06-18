@@ -46,10 +46,38 @@
       text-align:center; }
     .toast.hidden { display:none; }
     .muted { color:var(--muted); font-size:0.9rem; }
+    /* now-playing bar */
+    .np { display:flex; gap:0.8rem; align-items:center; background:linear-gradient(135deg,#161620,#1d1a14);
+      border:1px solid #2a2a33; border-radius:14px; padding:0.7rem; margin-bottom:1rem; }
+    .np.hidden { display:none; }
+    .np img { width:54px; height:54px; border-radius:8px; object-fit:cover; background:#222; }
+    .np-info { flex:1; min-width:0; }
+    .np-title { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .np-sub { color:var(--muted); font-size:0.85rem; }
+    .np-bar { height:4px; background:#2a2a33; border-radius:2px; margin-top:0.5rem; overflow:hidden; }
+    .np-bar > div { height:100%; width:0; background:var(--accent); }
   </style>
 </head>
 <body>
   <h1>🎶 My Vinyl Collection</h1>
+
+  <div id="np" class="np hidden">
+    <img id="np-art" alt="" />
+    <div class="np-info">
+      <div id="np-title" class="np-title"></div>
+      <div id="np-sub" class="np-sub"></div>
+      <div class="np-bar"><div id="np-fill"></div></div>
+    </div>
+  </div>
+
+  <div id="auth-needed" class="banner hidden">
+    This device isn't authorized. Open the <b>/manage?token=…</b> link shown in
+    the Pi's logs, or paste the token here:
+    <div class="search" style="margin-top:0.6rem">
+      <input id="token-input" placeholder="token" />
+      <button id="token-btn">Save</button>
+    </div>
+  </div>
 
   <div id="no-record" class="banner hidden">
     Recording must be done on the Raspberry Pi (no audio input detected here).

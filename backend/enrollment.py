@@ -27,6 +27,12 @@ from .recognition.models import Album, AlbumTrack, Side, SideTrack, TrackIndex
 
 log = logging.getLogger(__name__)
 
+# MusicBrainz IDs are UUIDs. Validating before they touch file paths / the index
+# prevents path traversal (the id becomes an art filename and an index key).
+_MBID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+)
+
 
 def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "x"
@@ -50,6 +56,8 @@ class EnrollmentService:
         return await self.mb.search_releases(query)
 
     async def add_album(self, release_mbid: str) -> Dict[str, Any]:
+        if not _MBID_RE.match(release_mbid or ""):
+            raise ValueError("invalid release MBID")
         release = await self.mb.get_release(release_mbid)
         if not release:
             raise ValueError("could not fetch release from MusicBrainz")

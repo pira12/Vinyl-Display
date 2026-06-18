@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import secrets
 from pathlib import Path
 
 import uvicorn
@@ -31,6 +32,26 @@ def _tmp_dir(cfg) -> str:
     if cfg.audio.tmp_dir:
         return cfg.audio.tmp_dir
     return "/dev/shm" if Path("/dev/shm").exists() else cfg.metadata.cache_dir
+
+
+def _resolve_token(cfg, db_dir: Path) -> str | None:
+    """Return the companion-API token, generating + persisting one if needed."""
+    if not cfg.server.require_auth:
+        return None
+    if cfg.server.auth_token:
+        return cfg.server.auth_token
+    token_file = db_dir / "auth_token.txt"
+    if token_file.exists():
+        return token_file.read_text(encoding="utf-8").strip()
+    token = secrets.token_urlsafe(18)
+    token_file.parent.mkdir(parents=True, exist_ok=True)
+    token_file.write_text(token, encoding="utf-8")
+    try:
+        token_file.chmod(0o600)
+    except OSError:
+        pass
+    log.warning("Generated companion-app token (saved to %s)", token_file)
+    return token
 
 
 def build_backend(cfg, index: TrackIndex):
@@ -83,12 +104,15 @@ async def run(cfg) -> None:
         cfg, index, backend, mb, lyrics, capture=capture, art_dir=str(art_dir)
     )
 
-    app = create_app(state, index, enrollment, art_dir=str(art_dir))
+    token = _resolve_token(cfg, db_dir)
+    app = create_app(state, index, enrollment, art_dir=str(art_dir), auth_token=token)
     server = uvicorn.Server(
         uvicorn.Config(app, host=cfg.server.host, port=cfg.server.port, log_level="info")
     )
 
     log.info("Vinyl Display running at http://%s:%s", cfg.server.host, cfg.server.port)
+    if token:
+        log.info("Companion app: open /manage?token=%s on your phone (once).", token)
     try:
         await asyncio.gather(server.serve(), recognizer.run())
     finally:
