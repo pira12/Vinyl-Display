@@ -28,6 +28,10 @@ class AudioConfig:
     buffer_seconds: float = 12.0
     query_seconds: float = 10.0
     silence_rms: float = 0.01
+    tmp_dir: Optional[str] = None     # scratch dir for query WAV; defaults to RAM
+
+    def __post_init__(self) -> None:
+        self.tmp_dir = _expand(self.tmp_dir)
 
 
 @dataclass
@@ -35,7 +39,8 @@ class RecognitionConfig:
     backend: str = "olaf"            # "olaf" | "mock"
     olaf_bin: str = "olaf"
     olaf_db: str = "~/.olaf/db"
-    interval_seconds: float = 20.0
+    interval_seconds: float = 20.0           # slow cadence: drift correction
+    fast_interval_seconds: float = 3.0       # fast cadence: lock on track changes
     min_match_score: int = 5
 
     def __post_init__(self) -> None:

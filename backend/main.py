@@ -16,6 +16,7 @@ import uvicorn
 
 from .audio.capture import AudioCapture, list_devices
 from .config import load_config
+from .enrollment import EnrollmentService
 from .metadata.lyrics import LyricsClient
 from .metadata.musicbrainz import MusicBrainzClient
 from .recognition.models import TrackIndex
@@ -24,6 +25,12 @@ from .server import create_app
 from .state import StateManager
 
 log = logging.getLogger("vinyl")
+
+
+def _tmp_dir(cfg) -> str:
+    if cfg.audio.tmp_dir:
+        return cfg.audio.tmp_dir
+    return "/dev/shm" if Path("/dev/shm").exists() else cfg.metadata.cache_dir
 
 
 def build_backend(cfg, index: TrackIndex):
@@ -44,7 +51,10 @@ async def run(cfg) -> None:
     state = StateManager(speed_factor=cfg.playback.speed_factor)
     state.bind_loop(asyncio.get_running_loop())
 
-    index = TrackIndex(str(Path(cfg.recognition.olaf_db).parent / "index.json"))
+    db_dir = Path(cfg.recognition.olaf_db).parent
+    art_dir = db_dir / "art"
+    art_dir.mkdir(parents=True, exist_ok=True)
+    index = TrackIndex(str(db_dir / "index.json"))
     backend = build_backend(cfg, index)
 
     capture = None
@@ -65,10 +75,15 @@ async def run(cfg) -> None:
     lyrics = LyricsClient(cfg.metadata.musicbrainz_useragent)
 
     recognizer = RecognitionService(
-        cfg, state, index, backend, capture=capture, mb_client=mb, lyrics_client=lyrics
+        cfg, state, index, backend, capture=capture, tmp_dir=_tmp_dir(cfg)
     )
 
-    app = create_app(state)
+    # Companion-app backend: search/add albums, capture & fingerprint sides.
+    enrollment = EnrollmentService(
+        cfg, index, backend, mb, lyrics, capture=capture, art_dir=str(art_dir)
+    )
+
+    app = create_app(state, index, enrollment, art_dir=str(art_dir))
     server = uvicorn.Server(
         uvicorn.Config(app, host=cfg.server.host, port=cfg.server.port, log_level="info")
     )

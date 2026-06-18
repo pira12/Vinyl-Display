@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>My Vinyl Collection</title>
+  <style>
+    :root { --bg:#0b0b0f; --fg:#f4f1ea; --muted:#8a8678; --accent:#e8c37a; --panel:#16161c; }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { margin:0; background:var(--bg); color:var(--fg);
+      font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+      padding:1rem 1rem 4rem; }
+    h1 { font-size:1.4rem; margin:0.2rem 0 1rem; }
+    h2 { font-size:0.95rem; color:var(--muted); text-transform:uppercase;
+      letter-spacing:0.08em; margin:1.6rem 0 0.7rem; }
+    .search { display:flex; gap:0.5rem; }
+    input { flex:1; background:var(--panel); border:1px solid #2a2a33; color:var(--fg);
+      border-radius:10px; padding:0.8rem; font-size:1rem; }
+    button { background:var(--accent); color:#181400; border:0; border-radius:10px;
+      padding:0.8rem 1rem; font-size:0.95rem; font-weight:600; }
+    button.ghost { background:var(--panel); color:var(--fg); border:1px solid #2a2a33; }
+    button:disabled { opacity:0.4; }
+    .card { display:flex; gap:0.8rem; background:var(--panel); border-radius:12px;
+      padding:0.7rem; margin-bottom:0.6rem; align-items:center; }
+    .card img { width:60px; height:60px; border-radius:8px; object-fit:cover; background:#222; flex:0 0 auto; }
+    .card .info { flex:1; min-width:0; }
+    .card .title { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .card .sub { color:var(--muted); font-size:0.85rem; }
+    .sides { display:flex; gap:0.4rem; flex-wrap:wrap; margin-top:0.4rem; }
+    .side-btn { padding:0.4rem 0.7rem; font-size:0.85rem; border-radius:8px; }
+    .side-btn.done { background:#22351f; color:#9fd18a; border:1px solid #2f5128; }
+    .badge { font-size:0.7rem; background:#22351f; color:#9fd18a; padding:0.15rem 0.45rem;
+      border-radius:6px; margin-left:0.4rem; }
+    .banner { background:#2a1f10; border:1px solid var(--accent); border-radius:12px;
+      padding:0.9rem; margin-bottom:1rem; font-size:0.9rem; }
+    .rec-bar { position:fixed; left:0; right:0; bottom:0; background:#3a0f12;
+      border-top:1px solid #7a2630; padding:0.9rem 1rem;
+      display:flex; align-items:center; gap:0.8rem; }
+    .rec-bar.hidden, .banner.hidden { display:none; }
+    .dot { width:12px; height:12px; border-radius:50%; background:#ff4d4d;
+      animation:pulse 1s infinite; flex:0 0 auto; }
+    @keyframes pulse { 50% { opacity:0.3; } }
+    .rec-bar .label { flex:1; font-size:0.9rem; }
+    .toast { position:fixed; left:1rem; right:1rem; bottom:1rem; background:#1d2a1a;
+      border:1px solid #2f5128; color:#cfe9c2; padding:0.8rem; border-radius:10px;
+      text-align:center; }
+    .toast.hidden { display:none; }
+    .muted { color:var(--muted); font-size:0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>🎶 My Vinyl Collection</h1>
+
+  <div id="no-record" class="banner hidden">
+    Recording must be done on the Raspberry Pi (no audio input detected here).
+    You can still search and add albums.
+  </div>
+
+  <div class="search">
+    <input id="q" placeholder="Search an album to add…" autocomplete="off" />
+    <button id="search-btn">Search</button>
+  </div>
+  <div id="results"></div>
+
+  <h2>Your records (<span id="count">0</span>)</h2>
+  <div id="collection"></div>
+
+  <div id="rec-bar" class="rec-bar hidden">
+    <div class="dot"></div>
+    <div class="label">Recording <b id="rec-label"></b> — play the side from the start.</div>
+    <button id="stop-btn">Stop & save</button>
+    <button id="cancel-btn" class="ghost">✕</button>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/manage.js"></script>
+</body>
+</html>

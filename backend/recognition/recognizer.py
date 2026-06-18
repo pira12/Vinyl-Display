@@ -1,87 +1,120 @@
 """The recognition loop — the heart of the system.
 
-On a fixed cadence it:
-  1. checks the input level (silence => idle / needle up),
-  2. asks the recognizer backend what's playing and where we are in it,
-  3. on a *new* track, fetches album metadata ("up next") and synced lyrics,
-  4. on the *same* track, re-syncs the play clock to correct turntable drift.
+Runtime is fully offline: it matches the playing side against the local
+fingerprint DB and reads cached lyrics + album art straight from the index
+(both fetched once at enrollment). No network calls happen here.
 
-All blocking work (olaf subprocess, WAV writing) is pushed off the event loop
-with ``asyncio.to_thread``.
+Cadence is adaptive: it polls cheaply while the platter is silent, locks on
+quickly when audio starts or a track changes (fast interval), then relaxes to
+the slow interval to just correct clock drift.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional, Tuple
 
-from ..metadata.lyrics import LyricsClient
-from ..metadata.musicbrainz import MusicBrainzClient
 from ..state import StateManager
-from .models import Match, TrackIndex, TrackRef
+from .models import Match, Resolved, TrackIndex
 
 log = logging.getLogger(__name__)
 
 
+def _art_url(art_path: Optional[str]) -> Optional[str]:
+    return f"/art/{Path(art_path).name}" if art_path else None
+
+
 class RecognitionService:
-    def __init__(
-        self,
-        config,
-        state: StateManager,
-        index: TrackIndex,
-        backend,
-        capture=None,
-        mb_client: Optional[MusicBrainzClient] = None,
-        lyrics_client: Optional[LyricsClient] = None,
-    ) -> None:
+    def __init__(self, config, state: StateManager, index: TrackIndex,
+                 backend, capture=None, tmp_dir: Optional[str] = None) -> None:
         self.cfg = config
         self.state = state
         self.index = index
         self.backend = backend
         self.capture = capture
-        self.mb = mb_client
-        self.lyrics_client = lyrics_client
         self.is_mock = config.recognition.backend == "mock"
-        self._query_wav = Path(config.metadata.cache_dir) / "query.wav"
+        self._query_wav = Path(tmp_dir or ".") / "vinyl-query.wav"
+        self._current: Optional[Tuple[str, int]] = None   # (side_key, track_index)
 
     async def run(self) -> None:
+        slow = self.cfg.recognition.interval_seconds
+        fast = self.cfg.recognition.fast_interval_seconds
         log.info("Recognition loop started (backend=%s)", self.cfg.recognition.backend)
         while True:
             try:
-                await self._tick()
+                locked = await self._tick()
             except Exception:  # noqa: BLE001 - never let the loop die
                 log.exception("recognition tick failed")
-            await asyncio.sleep(self.cfg.recognition.interval_seconds)
+                locked = False
+            await asyncio.sleep(fast if (self.is_mock or not locked) else slow)
 
-    async def _tick(self) -> None:
-        # 1. Silence detection (skip for the mock backend, which has no audio).
+    async def _tick(self) -> bool:
+        """Run one recognition cycle. Returns True when locked on a track."""
+        # Silence => idle. Poll quickly so we notice audio resuming.
         if self.capture is not None and not self.is_mock:
             if self.capture.rms() < self.cfg.audio.silence_rms:
                 self.state.set_status("idle")
-                return
+                self._current = None
+                return False
 
-        # 2. Recognize.
         match = await self._recognize()
         if match is None:
-            # A transient miss mid-track is normal; keep showing the track.
             if self.state.status != "playing":
                 self.state.set_status("listening")
-            return
-
-        ref = self.index.get(match.key)
-        if ref is None:
-            log.info("matched unknown key %s", match.key)
-            self.state.set_status("unknown")
-            return
+            self._current = None
+            return False
 
         offset_ms = int(match.offset_seconds * 1000)
-        if self.state.track is not None and self.state.track.key == ref.key:
-            self.state.resync(offset_ms)        # same track -> just correct drift
-        else:
-            await self._load_track(ref, offset_ms)
+        resolved = self.index.resolve(match.key, offset_ms)
+        if resolved is None:
+            self.state.set_status("unknown")
+            self._current = None
+            return False
+
+        ident = (match.key, resolved.index)
+        if ident == self._current:
+            self.state.resync(resolved.position_ms)   # same track -> correct drift
+            return True
+
+        self._current = ident
+        self._publish(resolved)
+        return True
+
+    def _publish(self, r: Resolved) -> None:
+        log.info("now playing: %s — %s", r.album.artist, r.track.title)
+        track = {
+            "title": r.track.title,
+            "artist": r.album.artist,
+            "position": r.track.position,
+            "number": r.track.number,
+            "duration_ms": r.track.length_ms,
+        }
+        album = {
+            "title": r.album.title,
+            "artist": r.album.artist,
+            "year": r.album.year,
+            "art_url": _art_url(r.album.art_path),
+        }
+        tracklist = [
+            {"position": t.position, "number": t.number, "title": t.title,
+             "length_ms": t.length_ms}
+            for t in r.album.tracklist
+        ]
+        next_track: Optional[Dict[str, Any]] = None
+        if r.next_track is not None:
+            next_track = {"title": r.next_track.title, "position": r.next_track.position}
+
+        self.state.set_now_playing(
+            track=track,
+            album=album,
+            tracklist=tracklist,
+            current_index=r.index,
+            next_track=next_track,
+            lyrics=r.track.lyrics or {"synced": False, "lines": []},
+            position_ms=r.position_ms,
+        )
 
     async def _recognize(self) -> Optional[Match]:
         if self.is_mock:
@@ -97,93 +130,3 @@ class RecognitionService:
         audio = self.capture.get_recent(self.cfg.audio.query_seconds)
         self._query_wav.parent.mkdir(parents=True, exist_ok=True)
         sf.write(str(self._query_wav), audio, self.cfg.audio.samplerate)
-
-    async def _load_track(self, ref: TrackRef, offset_ms: int) -> None:
-        log.info("now playing: %s — %s", ref.artist, ref.title)
-        album, tracklist, current_index = await self._resolve_album(ref)
-        next_track = None
-        if current_index is not None and current_index + 1 < len(tracklist):
-            next_track = tracklist[current_index + 1]
-
-        lyrics: Dict[str, Any] = {"synced": False, "lines": []}
-        if self.cfg.lyrics.enabled and self.lyrics_client is not None:
-            duration_s = (ref.duration_ms or 0) / 1000.0 or None
-            lyrics = await self.lyrics_client.get(
-                ref.artist, ref.title, ref.album, duration_s
-            )
-
-        self.state.set_now_playing(
-            track=ref,
-            album=album,
-            tracklist=tracklist,
-            current_index=current_index,
-            next_track=next_track,
-            lyrics=lyrics,
-            position_ms=offset_ms,
-        )
-
-    async def _resolve_album(self, ref: TrackRef):
-        """Return (album dict, tracklist, current_index).
-
-        Prefers MusicBrainz; falls back to a tracklist assembled from the local
-        index so the app works fully offline (and in mock mode).
-        """
-        if self.mb is not None:
-            mbid = ref.release_mbid
-            if mbid is None and ref.artist and ref.album:
-                mbid = await self.mb.search_release(ref.artist, ref.album)
-            if mbid:
-                release = await self.mb.get_release(mbid)
-                if release:
-                    album = {
-                        "title": release["title"],
-                        "artist": release["artist"],
-                        "year": release.get("year", ""),
-                        "art_url": release.get("art_url"),
-                    }
-                    tracklist = release["tracklist"]
-                    idx = self._locate(ref, tracklist)
-                    return album, tracklist, idx
-
-        return self._local_album(ref)
-
-    def _local_album(self, ref: TrackRef):
-        siblings: List[TrackRef] = [
-            t for t in self.index.tracks.values()
-            if t.album == ref.album and t.artist == ref.artist
-        ]
-        siblings.sort(key=lambda t: (t.track_number or 0))
-        tracklist = [
-            {
-                "position": t.position,
-                "number": t.track_number,
-                "title": t.title,
-                "length_ms": t.duration_ms,
-                "recording_mbid": t.recording_mbid,
-                "key": t.key,
-            }
-            for t in siblings
-        ]
-        current_index = next(
-            (i for i, t in enumerate(siblings) if t.key == ref.key), None
-        )
-        album = {
-            "title": ref.album,
-            "artist": ref.artist,
-            "year": "",
-            "art_url": None,
-        }
-        return album, tracklist, current_index
-
-    @staticmethod
-    def _locate(ref: TrackRef, tracklist: List[Dict[str, Any]]) -> Optional[int]:
-        for i, t in enumerate(tracklist):
-            if ref.recording_mbid and t.get("recording_mbid") == ref.recording_mbid:
-                return i
-        for i, t in enumerate(tracklist):
-            if ref.position and t.get("position") == ref.position:
-                return i
-        for i, t in enumerate(tracklist):
-            if t.get("title", "").lower() == ref.title.lower():
-                return i
-        return None
