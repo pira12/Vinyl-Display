@@ -38,6 +38,10 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "x"
 
 
+# Sample rate of the PCM streamed from the browser mic (mono, 16-bit).
+MIC_SR = 16000
+
+
 class EnrollmentService:
     def __init__(self, cfg, index: TrackIndex, backend, mb: MusicBrainzClient,
                  lyrics: LyricsClient, capture=None, art_dir: str = "") -> None:
@@ -50,6 +54,7 @@ class EnrollmentService:
         self.art_dir = Path(art_dir) if art_dir else Path(".")
         self.refs_dir = Path(cfg.recognition.olaf_db).parent / "refs"
         self._session: Optional[Dict[str, str]] = None   # active recording
+        self._client_rec: Optional[Dict[str, Any]] = None  # client-fed PCM session
 
     # -- metadata (phone-friendly) ------------------------------------------
     async def search(self, query: str) -> List[Dict[str, Any]]:
@@ -144,13 +149,73 @@ class EnrollmentService:
                 sides.append(label[0].upper())
         return sides or ["A"]
 
-    # -- audio enrollment (at the Pi) ---------------------------------------
+    # -- client-fed enrollment (audio streamed from the iPad mic) -----------
+    # The browser records a whole side through the mic and streams raw PCM
+    # (mono, 16-bit, MIC_SR) here in chunks; we append to a file on disk and
+    # fingerprint the finished side. No local audio device is involved.
     def can_record(self) -> bool:
+        return hasattr(self.backend, "store")
+
+    def start_client_recording(self, album_id: str, side: str) -> None:
+        if not hasattr(self.backend, "store"):
+            raise RuntimeError("recording needs the olaf backend")
+        if album_id not in self.index.albums:
+            raise ValueError("unknown album; add it first")
+        if self._client_rec is not None:
+            self.cancel_client_recording()
+        self.refs_dir.mkdir(parents=True, exist_ok=True)
+        raw_path = self.refs_dir / f".incoming-{album_id}-{side.upper()}.pcm"
+        self._client_rec = {
+            "album_id": album_id,
+            "side": side.upper(),
+            "path": str(raw_path),
+            "fh": open(raw_path, "wb"),
+        }
+        self._session = {"album_id": album_id, "side": side.upper()}
+        log.info("client recording started: side %s of %s", side, album_id)
+
+    def append_chunk(self, data: bytes) -> int:
+        if self._client_rec is None:
+            raise RuntimeError("no active recording")
+        self._client_rec["fh"].write(data)
+        return self._client_rec["fh"].tell()
+
+    def stop_client_recording(self) -> Dict[str, Any]:
+        import numpy as np  # lazy
+
+        if self._client_rec is None:
+            raise RuntimeError("no active recording")
+        rec = self._client_rec
+        self._client_rec = None
+        self._session = None
+        rec["fh"].close()
+
+        raw = Path(rec["path"]).read_bytes()
+        Path(rec["path"]).unlink(missing_ok=True)
+        if not raw:
+            raise RuntimeError("no audio was recorded")
+        audio = (np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0)
+        audio = audio.reshape(-1, 1)
+        return self.fingerprint_side(rec["album_id"], rec["side"], audio, MIC_SR)
+
+    def cancel_client_recording(self) -> None:
+        rec, self._client_rec, self._session = self._client_rec, None, None
+        if rec is not None:
+            try:
+                rec["fh"].close()
+            except Exception:  # noqa: BLE001
+                pass
+            Path(rec["path"]).unlink(missing_ok=True)
+
+    # -- audio enrollment (at the Pi, line-in -- local dev only) ------------
+    def can_record_local(self) -> bool:
         return self.capture is not None and hasattr(self.backend, "store")
 
     def recording_status(self) -> Dict[str, Any]:
-        rec = bool(self.capture and self.capture.is_recording)
-        return {"recording": rec, "session": self._session, "can_record": self.can_record()}
+        rec = self._client_rec is not None or bool(
+            self.capture and self.capture.is_recording)
+        return {"recording": rec, "session": self._session,
+                "can_record": self.can_record()}
 
     def start_recording(self, album_id: str, side: str) -> None:
         if not self.can_record():

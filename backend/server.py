@@ -3,8 +3,11 @@ art, and the phone companion app + its JSON API."""
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
+import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -14,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .enrollment import EnrollmentService
 from .recognition.models import TrackIndex
+from .recognition.recognizer import apply_match
 from .settings import SettingsError
 from .state import StateManager
 
@@ -25,8 +29,16 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 def create_app(state: StateManager, index: TrackIndex,
                enrollment: EnrollmentService, art_dir: str,
                auth_token: Optional[str] = None,
-               settings=None) -> FastAPI:
-    app = FastAPI(title="Vinyl Display")
+               settings=None, tmp_dir: Optional[str] = None) -> FastAPI:
+    tmp_dir = tmp_dir or tempfile.gettempdir()
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # Let non-async callers (recognition/enrollment) schedule broadcasts.
+        state.bind_loop(asyncio.get_running_loop())
+        yield
+
+    app = FastAPI(title="Vinyl Display", lifespan=lifespan)
 
     @app.middleware("http")
     async def require_token(request: Request, call_next):
@@ -94,6 +106,7 @@ def create_app(state: StateManager, index: TrackIndex,
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse({"album": album, "sides": enrollment.sides_for(mbid)})
 
+    # Enrollment: the iPad mic streams a whole side here as raw PCM chunks.
     @app.post("/api/record/start")
     async def api_record_start(request: Request) -> JSONResponse:
         body = await request.json() or {}
@@ -102,27 +115,55 @@ def create_app(state: StateManager, index: TrackIndex,
             return JSONResponse({"error": "album_id required"}, status_code=400)
         side = str(body.get("side", "A"))[:2]
         try:
-            enrollment.start_recording(album_id, side)
+            enrollment.start_client_recording(album_id, side)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse(enrollment.recording_status())
 
+    @app.post("/api/record/chunk")
+    async def api_record_chunk(request: Request) -> JSONResponse:
+        data = await request.body()
+        if not data:
+            return JSONResponse({"error": "empty chunk"}, status_code=400)
+        try:
+            received = enrollment.append_chunk(data)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"received_bytes": received})
+
     @app.post("/api/record/stop")
     async def api_record_stop() -> JSONResponse:
         try:
-            result = await _stop_recording(enrollment)
+            # Fingerprinting (olaf subprocess + WAV write) is blocking.
+            result = await asyncio.to_thread(enrollment.stop_client_recording)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse({"result": result})
 
     @app.post("/api/record/cancel")
     async def api_record_cancel() -> JSONResponse:
-        enrollment.cancel_recording()
+        enrollment.cancel_client_recording()
         return JSONResponse(enrollment.recording_status())
 
     @app.get("/api/record/status")
     async def api_record_status() -> JSONResponse:
         return JSONResponse(enrollment.recording_status())
+
+    # Recognition: the iPad mic posts a short WAV clip; we fingerprint it here.
+    @app.post("/api/recognize")
+    async def api_recognize(request: Request) -> JSONResponse:
+        if not state.listening:
+            return JSONResponse({"status": "paused", "matched": False})
+        data = await request.body()
+        if not data:
+            return JSONResponse({"error": "no audio"}, status_code=400)
+        resolved = await asyncio.to_thread(_recognize_clip, enrollment, index,
+                                           state, tmp_dir, data)
+        return JSONResponse({
+            "status": state.status,
+            "matched": resolved is not None,
+            "track": state.track,
+        })
 
     # ---- listening control ----
     @app.post("/api/listen")
@@ -167,8 +208,14 @@ def create_app(state: StateManager, index: TrackIndex,
     return app
 
 
-async def _stop_recording(enrollment: EnrollmentService):
-    import asyncio
+def _recognize_clip(enrollment: EnrollmentService, index: TrackIndex,
+                    state: StateManager, tmp_dir: str, wav: bytes):
+    """Blocking: write the uploaded WAV, query Olaf, update shared state.
 
-    # Fingerprinting (olaf subprocess + WAV write) is blocking; offload it.
-    return await asyncio.to_thread(enrollment.stop_recording)
+    Runs off the event loop (olaf is a subprocess). The clip is already a WAV
+    encoded by the browser, so it's handed straight to the backend's query.
+    """
+    clip = Path(tmp_dir) / "vinyl-clip.wav"
+    clip.write_bytes(wav)
+    match = enrollment.backend.query(str(clip))
+    return apply_match(state, index, match)
