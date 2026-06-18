@@ -34,6 +34,9 @@ class StateManager:
         self.lyrics: Dict[str, Any] = {"synced": False, "lines": []}
         self.position_ms: int = 0
         self.updated_at: int = _now_ms()
+        # Last (side_key, track_index) we locked on, so request-driven
+        # recognition can tell "same track -> resync" from "new track".
+        self.current_ident: Optional[tuple] = None
 
         self._listeners: Set[Any] = set()
         self._loop: Optional[asyncio.AbstractEventLoop] = None

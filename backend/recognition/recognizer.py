@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from ..state import StateManager
 from .models import Match, Resolved, TrackIndex
@@ -24,6 +24,72 @@ log = logging.getLogger(__name__)
 
 def _art_url(art_path: Optional[str]) -> Optional[str]:
     return f"/art/{Path(art_path).name}" if art_path else None
+
+
+def publish_resolved(state: StateManager, r: Resolved) -> None:
+    """Push a resolved match into the shared state as the now-playing track."""
+    log.info("now playing: %s — %s", r.album.artist, r.track.title)
+    track = {
+        "title": r.track.title,
+        "artist": r.album.artist,
+        "position": r.track.position,
+        "number": r.track.number,
+        "duration_ms": r.track.length_ms,
+    }
+    album = {
+        "title": r.album.title,
+        "artist": r.album.artist,
+        "year": r.album.year,
+        "art_url": _art_url(r.album.art_path),
+    }
+    tracklist = [
+        {"position": t.position, "number": t.number, "title": t.title,
+         "length_ms": t.length_ms}
+        for t in r.album.tracklist
+    ]
+    next_track: Optional[Dict[str, Any]] = None
+    if r.next_track is not None:
+        next_track = {"title": r.next_track.title, "position": r.next_track.position}
+
+    state.set_now_playing(
+        track=track,
+        album=album,
+        tracklist=tracklist,
+        current_index=r.index,
+        next_track=next_track,
+        lyrics=r.track.lyrics or {"synced": False, "lines": []},
+        position_ms=r.position_ms,
+    )
+
+
+def apply_match(state: StateManager, index: TrackIndex,
+                match: Optional[Match]) -> Optional[Resolved]:
+    """Resolve a match and update shared state, deduping repeat hits.
+
+    Used by both the local recognition loop and the request-driven
+    ``/api/recognize`` endpoint. Returns the resolved track, or None.
+    """
+    if match is None:
+        if state.status != "playing":
+            state.set_status("listening")
+        state.current_ident = None
+        return None
+
+    offset_ms = int(match.offset_seconds * 1000)
+    resolved = index.resolve(match.key, offset_ms)
+    if resolved is None:
+        state.set_status("unknown")
+        state.current_ident = None
+        return None
+
+    ident = (match.key, resolved.index)
+    if ident == state.current_ident:
+        state.resync(resolved.position_ms)   # same track -> correct drift
+        return resolved
+
+    state.current_ident = ident
+    publish_resolved(state, resolved)
+    return resolved
 
 
 class RecognitionService:
@@ -36,7 +102,6 @@ class RecognitionService:
         self.capture = capture
         self.is_mock = config.recognition.backend == "mock"
         self._query_wav = Path(tmp_dir or ".") / "vinyl-query.wav"
-        self._current: Optional[Tuple[str, int]] = None   # (side_key, track_index)
 
     async def run(self) -> None:
         log.info("Recognition loop started (backend=%s)", self.cfg.recognition.backend)
@@ -56,72 +121,18 @@ class RecognitionService:
         # Paused by the user => do no recognition until switched back on.
         if not self.state.listening:
             self.state.set_status("paused")
-            self._current = None
+            self.state.current_ident = None
             return False
 
         # Silence => idle. Poll quickly so we notice audio resuming.
         if self.capture is not None and not self.is_mock:
             if self.capture.rms() < self.cfg.audio.silence_rms:
                 self.state.set_status("idle")
-                self._current = None
+                self.state.current_ident = None
                 return False
 
         match = await self._recognize()
-        if match is None:
-            if self.state.status != "playing":
-                self.state.set_status("listening")
-            self._current = None
-            return False
-
-        offset_ms = int(match.offset_seconds * 1000)
-        resolved = self.index.resolve(match.key, offset_ms)
-        if resolved is None:
-            self.state.set_status("unknown")
-            self._current = None
-            return False
-
-        ident = (match.key, resolved.index)
-        if ident == self._current:
-            self.state.resync(resolved.position_ms)   # same track -> correct drift
-            return True
-
-        self._current = ident
-        self._publish(resolved)
-        return True
-
-    def _publish(self, r: Resolved) -> None:
-        log.info("now playing: %s — %s", r.album.artist, r.track.title)
-        track = {
-            "title": r.track.title,
-            "artist": r.album.artist,
-            "position": r.track.position,
-            "number": r.track.number,
-            "duration_ms": r.track.length_ms,
-        }
-        album = {
-            "title": r.album.title,
-            "artist": r.album.artist,
-            "year": r.album.year,
-            "art_url": _art_url(r.album.art_path),
-        }
-        tracklist = [
-            {"position": t.position, "number": t.number, "title": t.title,
-             "length_ms": t.length_ms}
-            for t in r.album.tracklist
-        ]
-        next_track: Optional[Dict[str, Any]] = None
-        if r.next_track is not None:
-            next_track = {"title": r.next_track.title, "position": r.next_track.position}
-
-        self.state.set_now_playing(
-            track=track,
-            album=album,
-            tracklist=tracklist,
-            current_index=r.index,
-            next_track=next_track,
-            lyrics=r.track.lyrics or {"synced": False, "lines": []},
-            position_ms=r.position_ms,
-        )
+        return apply_match(self.state, self.index, match) is not None
 
     async def _recognize(self) -> Optional[Match]:
         if self.is_mock:
