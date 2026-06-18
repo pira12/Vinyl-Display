@@ -90,8 +90,16 @@ async def run(cfg, cfg_path: str = "config.yaml") -> None:
         try:
             capture.start()
         except Exception:  # noqa: BLE001
-            log.exception("audio capture failed to start; is the USB interface connected?")
-            raise
+            # Don't take the whole app down over a missing/unconfigured input.
+            # The web UI (and its Settings panel) must still come up so the
+            # device can be picked; recognition simply stays idle until then.
+            log.error(
+                "audio capture failed to start (device=%r); is the USB "
+                "interface connected? The web app will still start so you can "
+                "pick a device under Collection > Settings, then restart.",
+                cfg.audio.device,
+            )
+            capture = None
 
     mb = MusicBrainzClient(cfg.metadata.musicbrainz_useragent, cfg.metadata.cache_dir)
     lyrics = LyricsClient(cfg.metadata.musicbrainz_useragent)
