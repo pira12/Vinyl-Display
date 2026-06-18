@@ -128,3 +128,26 @@ def list_devices() -> str:
     except Exception as exc:  # pragma: no cover - depends on host
         return f"sounddevice unavailable: {exc}"
     return str(sd.query_devices())
+
+
+def list_input_devices() -> list:
+    """Structured list of capture devices for the settings UI.
+
+    Returns ``[{index, name, channels}]`` for devices that have input
+    channels. Degrades to ``[]`` when sounddevice is unavailable.
+    """
+    try:
+        import sounddevice as sd
+    except Exception:  # pragma: no cover - depends on host
+        return []
+    try:
+        devices = sd.query_devices()
+    except Exception:  # pragma: no cover - depends on host
+        return []
+    out = []
+    for i, d in enumerate(devices):
+        channels = int(d.get("max_input_channels", 0) or 0)
+        if channels > 0:
+            out.append({"index": i, "name": d.get("name", str(i)),
+                        "channels": channels})
+    return out

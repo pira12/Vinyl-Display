@@ -23,6 +23,7 @@ from .metadata.musicbrainz import MusicBrainzClient
 from .recognition.models import TrackIndex
 from .recognition.recognizer import RecognitionService
 from .server import create_app
+from .settings import SettingsManager
 from .state import StateManager
 
 log = logging.getLogger("vinyl")
@@ -68,7 +69,7 @@ def build_backend(cfg, index: TrackIndex):
     )
 
 
-async def run(cfg) -> None:
+async def run(cfg, cfg_path: str = "config.yaml") -> None:
     state = StateManager(speed_factor=cfg.playback.speed_factor)
     state.bind_loop(asyncio.get_running_loop())
 
@@ -104,8 +105,13 @@ async def run(cfg) -> None:
         cfg, index, backend, mb, lyrics, capture=capture, art_dir=str(art_dir)
     )
 
+    settings = SettingsManager(
+        cfg, cfg_path, state=state, backend=backend, mb=mb, lyrics=lyrics
+    )
+
     token = _resolve_token(cfg, db_dir)
-    app = create_app(state, index, enrollment, art_dir=str(art_dir), auth_token=token)
+    app = create_app(state, index, enrollment, art_dir=str(art_dir),
+                     auth_token=token, settings=settings)
     server = uvicorn.Server(
         uvicorn.Config(app, host=cfg.server.host, port=cfg.server.port, log_level="info")
     )
@@ -143,7 +149,7 @@ def main() -> None:
         cfg.recognition.backend = "mock"
 
     try:
-        asyncio.run(run(cfg))
+        asyncio.run(run(cfg, args.config))
     except KeyboardInterrupt:
         pass
 

@@ -371,6 +371,105 @@ $("q").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
 $("stop-btn").onclick = stopRecording;
 $("cancel-btn").onclick = cancelRecording;
 
+// ---------- settings ----------
+let settingsValues = {};   // last values loaded from the server
+
+function deviceFromSelect() {
+  const v = $("set-device").value;
+  if (v === "") return null;
+  return /^\d+$/.test(v) ? parseInt(v, 10) : v;
+}
+
+function readSettings() {
+  return {
+    "audio.device": deviceFromSelect(),
+    "recognition.backend": $("set-backend").value,
+    "audio.silence_rms": parseFloat($("set-silence").value),
+    "playback.speed_factor": parseFloat($("set-speed").value),
+    "recognition.interval_seconds": parseFloat($("set-slow").value),
+    "recognition.fast_interval_seconds": parseFloat($("set-fast").value),
+    "recognition.min_match_score": parseInt($("set-score").value, 10),
+    "lyrics.enabled": $("set-lyrics").checked,
+    "metadata.musicbrainz_useragent": $("set-ua").value.trim(),
+  };
+}
+
+async function loadSettings() {
+  let data;
+  try { data = await api("/api/settings"); } catch (e) { return; }
+  settingsValues = data.values || {};
+  const v = settingsValues;
+
+  const dsel = $("set-device");
+  dsel.innerHTML = '<option value="">System default</option>';
+  for (const d of data.devices || []) {
+    const o = document.createElement("option");
+    o.value = String(d.index);
+    o.textContent = `${d.index}: ${d.name}`;
+    dsel.appendChild(o);
+  }
+  const dev = v["audio.device"];
+  if (dev === null || dev === undefined) {
+    dsel.value = "";
+  } else if ([...dsel.options].some((o) => o.value === String(dev))) {
+    dsel.value = String(dev);
+  } else {
+    // configured device not currently detected — keep it as a choice.
+    const o = document.createElement("option");
+    o.value = String(dev); o.textContent = `${dev} (not detected)`;
+    dsel.appendChild(o); dsel.value = String(dev);
+  }
+
+  $("set-backend").value = v["recognition.backend"] || "olaf";
+  $("set-silence").value = v["audio.silence_rms"];
+  $("set-speed").value = v["playback.speed_factor"];
+  $("set-slow").value = v["recognition.interval_seconds"];
+  $("set-fast").value = v["recognition.fast_interval_seconds"];
+  $("set-score").value = v["recognition.min_match_score"];
+  $("set-lyrics").checked = !!v["lyrics.enabled"];
+  $("set-ua").value = v["metadata.musicbrainz_useragent"] || "";
+}
+
+async function saveSettings() {
+  const now = readSettings();
+  const changes = {};
+  for (const k in now) {
+    if (JSON.stringify(now[k]) !== JSON.stringify(settingsValues[k]))
+      changes[k] = now[k];
+  }
+  if (!Object.keys(changes).length) { toast("No changes to save."); return; }
+
+  const btn = $("settings-save");
+  btn.disabled = true; btn.textContent = "Saving…";
+  let res;
+  try {
+    res = await api("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(changes),
+    });
+  } catch (e) { btn.disabled = false; btn.textContent = "Save settings"; return; }
+  btn.disabled = false; btn.textContent = "Save settings";
+
+  if (res.error) {
+    const fields = res.fields ? " (" + Object.keys(res.fields).join(", ") + ")" : "";
+    toast("Couldn't save" + fields + ": " + res.error);
+    return;
+  }
+  settingsValues = Object.assign({}, settingsValues, changes);
+  if (res.restart_required && res.restart_required.length)
+    toast("Saved. Restart the app to apply: " + res.restart_required.join(", "));
+  else
+    toast("Saved and applied.");
+}
+
+$("settings-btn").onclick = () => {
+  const panel = $("settings-panel");
+  const opening = panel.classList.contains("hidden");
+  panel.classList.toggle("hidden");
+  if (opening) loadSettings();
+};
+$("settings-save").onclick = saveSettings;
+
 // ---------- boot ----------
 setMode(initialMode());
 connect();

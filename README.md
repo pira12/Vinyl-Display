@@ -140,6 +140,18 @@ knobs:
 - `recognition.fast_interval_seconds`: fast cadence used to lock on at track changes.
 - `playback.speed_factor`: turntable speed correction (for example `33.4/33.33`).
 
+### From the web app
+
+You don't have to edit the file by hand. Open Collection mode and tap
+**Settings** to change the common options from any device: audio device (picked
+from a detected list), MusicBrainz User-Agent, silence threshold, sync
+intervals, speed factor, lyrics on/off, min match score, and the olaf/mock
+backend. Most changes apply to the running app immediately; changing the audio
+device or backend is saved and takes effect on the next restart. The settings
+panel is part of the gated companion API, so it needs the same token as the rest
+of Collection mode. Saving rewrites `config.yaml`, so the comments in that file
+are not preserved once you save from the web app.
+
 ## Security
 
 The companion API can start audio capture from your turntable, so it's treated

@@ -39,8 +39,6 @@ class RecognitionService:
         self._current: Optional[Tuple[str, int]] = None   # (side_key, track_index)
 
     async def run(self) -> None:
-        slow = self.cfg.recognition.interval_seconds
-        fast = self.cfg.recognition.fast_interval_seconds
         log.info("Recognition loop started (backend=%s)", self.cfg.recognition.backend)
         while True:
             try:
@@ -48,6 +46,9 @@ class RecognitionService:
             except Exception:  # noqa: BLE001 - never let the loop die
                 log.exception("recognition tick failed")
                 locked = False
+            # Read the cadences each iteration so settings changes apply live.
+            slow = self.cfg.recognition.interval_seconds
+            fast = self.cfg.recognition.fast_interval_seconds
             await asyncio.sleep(fast if (self.is_mock or not locked) else slow)
 
     async def _tick(self) -> bool:

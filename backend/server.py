@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .enrollment import EnrollmentService
 from .recognition.models import TrackIndex
+from .settings import SettingsError
 from .state import StateManager
 
 log = logging.getLogger(__name__)
@@ -23,7 +24,8 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 def create_app(state: StateManager, index: TrackIndex,
                enrollment: EnrollmentService, art_dir: str,
-               auth_token: Optional[str] = None) -> FastAPI:
+               auth_token: Optional[str] = None,
+               settings=None) -> FastAPI:
     app = FastAPI(title="Vinyl Display")
 
     @app.middleware("http")
@@ -121,6 +123,30 @@ def create_app(state: StateManager, index: TrackIndex,
     @app.get("/api/record/status")
     async def api_record_status() -> JSONResponse:
         return JSONResponse(enrollment.recording_status())
+
+    # ---- settings ----
+    @app.get("/api/settings")
+    async def api_get_settings() -> JSONResponse:
+        if settings is None:
+            return JSONResponse({"error": "settings unavailable"}, status_code=404)
+        return JSONResponse(settings.snapshot())
+
+    @app.post("/api/settings")
+    async def api_post_settings(request: Request) -> JSONResponse:
+        if settings is None:
+            return JSONResponse({"error": "settings unavailable"}, status_code=404)
+        body = await request.json() or {}
+        changes = body.get("changes") if isinstance(body.get("changes"), dict) else body
+        if not isinstance(changes, dict) or not changes:
+            return JSONResponse({"error": "no settings supplied"}, status_code=400)
+        try:
+            result = settings.update(changes)
+        except SettingsError as exc:
+            return JSONResponse({"error": str(exc), "fields": exc.errors},
+                                status_code=400)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(result)
 
     # ---- static assets ----
     art_path = Path(art_dir)

@@ -54,7 +54,51 @@
   <!-- ============ COLLECTION MODE ============ -->
   <section id="add-view">
     <div class="add-inner">
-      <h1>🎶 My Vinyl Collection</h1>
+      <div class="coll-head">
+        <h1>🎶 My Vinyl Collection</h1>
+        <button id="settings-btn" class="ghost">⚙ Settings</button>
+      </div>
+
+      <!-- ---- settings panel ---- -->
+      <div id="settings-panel" class="settings hidden">
+        <div class="settings-grid">
+          <label class="field">Audio device
+            <select id="set-device"></select>
+            <span class="hint">Takes effect after a restart.</span>
+          </label>
+          <label class="field">Recognition backend
+            <select id="set-backend">
+              <option value="olaf">olaf (real fingerprinting)</option>
+              <option value="mock">mock (demo, no audio)</option>
+            </select>
+            <span class="hint">Takes effect after a restart.</span>
+          </label>
+          <label class="field">Silence threshold (RMS)
+            <input id="set-silence" type="number" min="0" max="1" step="0.005" />
+          </label>
+          <label class="field">Speed factor
+            <input id="set-speed" type="number" min="0.8" max="1.2" step="0.001" />
+          </label>
+          <label class="field">Slow interval (s)
+            <input id="set-slow" type="number" min="1" step="1" />
+          </label>
+          <label class="field">Fast interval (s)
+            <input id="set-fast" type="number" min="0.5" step="0.5" />
+          </label>
+          <label class="field">Min match score
+            <input id="set-score" type="number" min="1" step="1" />
+          </label>
+          <label class="field check">
+            <input id="set-lyrics" type="checkbox" /> Fetch synced lyrics
+          </label>
+          <label class="field wide">MusicBrainz User-Agent
+            <input id="set-ua" type="text" placeholder="VinylDisplay/0.1 ( you@example.com )" />
+          </label>
+        </div>
+        <div class="settings-actions">
+          <button id="settings-save">Save settings</button>
+        </div>
+      </div>
 
       <div id="np" class="np hidden">
         <img id="np-art" alt="" />
