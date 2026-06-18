@@ -1,0 +1,30 @@
+# Vinyl Display — Dokploy / Traefik deployment.
+#
+# Traefik (managed by Dokploy) terminates TLS for vinyl.ossolab.net and routes
+# to this container on port 8080. Adjust the certresolver and the external
+# network name to match your Dokploy/Traefik setup.
+services:
+  vinyl:
+    build: .
+    restart: unless-stopped
+    environment:
+      - DATA_DIR=/data
+    volumes:
+      - vinyl-data:/data
+    networks:
+      - dokploy-network
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.vinyl.rule=Host(`vinyl.ossolab.net`)
+      - traefik.http.routers.vinyl.entrypoints=websecure
+      - traefik.http.routers.vinyl.tls=true
+      - traefik.http.routers.vinyl.tls.certresolver=letsencrypt
+      - traefik.http.services.vinyl.loadbalancer.server.port=8080
+
+volumes:
+  vinyl-data:
+
+networks:
+  dokploy-network:
+    external: true
