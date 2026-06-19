@@ -83,8 +83,8 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
 
   return (
     <div className="mx-auto max-w-[960px] px-4 pb-24 pt-[4.5rem]">
-      <div className="mb-4 flex items-center justify-between gap-2">
-        <h1 className="text-2xl">🎶 My Vinyl Collection</h1>
+      <div className="mb-6 flex items-center justify-between gap-2">
+        <h1 className="text-lg font-semibold tracking-tight">Collection</h1>
         <div className="flex gap-2">
           <button
             onClick={mic.toggleListening}
@@ -100,7 +100,7 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
             onClick={() => setShowSettings((s) => !s)}
             className="rounded-lg border border-[#2a2a33] bg-panel px-3 py-2 text-sm font-semibold text-fg"
           >
-            ⚙ Settings
+            Settings
           </button>
         </div>
       </div>
@@ -218,7 +218,7 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
             onClick={cancelRecord}
             className="rounded-lg border border-[#2a2a33] bg-panel px-3 py-2 text-fg"
           >
-            ✕
+            Cancel
           </button>
         </div>
       )}

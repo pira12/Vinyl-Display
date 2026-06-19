@@ -37,6 +37,26 @@ export class MicEngine {
     this.source.connect(this.node);
     // Connect to destination so the worklet is pulled; it writes no output.
     this.node.connect(this.ctx.destination);
+
+    // iOS suspends an AudioContext that produces no output, which silently
+    // kills mic capture. A muted oscillator keeps it running.
+    this.keepAlive = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    g.gain.value = 0;
+    this.keepAlive.connect(g);
+    g.connect(this.ctx.destination);
+    this.keepAlive.start();
+  }
+
+  // Re-arm the context if the OS suspended it (e.g. after backgrounding).
+  async resume() {
+    if (this.ctx && this.ctx.state === "suspended") {
+      try {
+        await this.ctx.resume();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   _onFrame(frame) {
@@ -85,6 +105,7 @@ export class MicEngine {
 
   stop() {
     try {
+      if (this.keepAlive) this.keepAlive.stop();
       if (this.node) this.node.disconnect();
       if (this.source) this.source.disconnect();
       if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
@@ -96,6 +117,7 @@ export class MicEngine {
     this.node = null;
     this.source = null;
     this.stream = null;
+    this.keepAlive = null;
     this.ring = [];
     this.ringLen = 0;
     this.accum = null;
