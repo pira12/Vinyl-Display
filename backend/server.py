@@ -80,7 +80,8 @@ def create_app(state: StateManager, index: TrackIndex,
 
     @app.get("/healthz")
     async def healthz() -> dict:
-        return {"status": "ok", "state": state.status}
+        from .version import VERSION
+        return {"status": "ok", "state": state.status, "version": VERSION}
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
