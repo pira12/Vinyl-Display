@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, setToken, Unauthorized } from "../api.js";
 import AlbumCard from "./AlbumCard.jsx";
 import SettingsPanel from "./SettingsPanel.jsx";
+import MicStatus from "./MicStatus.jsx";
 
 export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, toast }) {
   const [albums, setAlbums] = useState([]);
@@ -87,31 +88,19 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
     refresh();
   }
 
-  const listening = state ? state.listening !== false : mic.micActive;
-
   return (
     <div className="mx-auto max-w-[960px] px-4 pb-24 pt-[4.5rem]">
-      <div className="mb-6 flex items-center justify-between gap-2">
+      <div className="mb-5 flex items-center justify-between gap-2">
         <h1 className="text-lg font-semibold tracking-tight">Collection</h1>
-        <div className="flex gap-2">
-          <button
-            onClick={mic.toggleListening}
-            className={
-              "rounded-lg border px-3 py-2 text-sm font-semibold " +
-              (listening ? "border-[#2a2a33] bg-panel text-fg" : "border-transparent text-[#181400]")
-            }
-            style={listening ? undefined : { background: "var(--accent)" }}
-          >
-            {listening ? "Stop listening" : "Start listening"}
-          </button>
-          <button
-            onClick={() => setShowSettings((s) => !s)}
-            className="rounded-lg border border-[#2a2a33] bg-panel px-3 py-2 text-sm font-semibold text-fg"
-          >
-            Settings
-          </button>
-        </div>
+        <button
+          onClick={() => setShowSettings((s) => !s)}
+          className="rounded-lg border border-[#2a2a33] bg-panel px-3 py-2 text-sm font-semibold text-fg"
+        >
+          Settings
+        </button>
       </div>
+
+      <MicStatus mic={mic} state={state} />
 
       {authNeeded && (
         <div className="mb-4 rounded-xl border border-[var(--accent)] bg-[#2a1f10] p-3 text-sm">

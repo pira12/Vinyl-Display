@@ -69,6 +69,17 @@ export class MicEngine {
     if (this.accum) this.accum.push(frame);
   }
 
+  // Recent input loudness as 0..1 (RMS of the last ~0.2s), for a level meter.
+  level() {
+    if (!this.ctx) return 0;
+    const recent = this.recent(0.2);
+    if (!recent.length) return 0;
+    let sum = 0;
+    for (let i = 0; i < recent.length; i++) sum += recent[i] * recent[i];
+    const rms = Math.sqrt(sum / recent.length);
+    return Math.min(1, rms * 4); // scale so normal listening lands mid-meter
+  }
+
   // Most recent `seconds` of audio at the capture rate.
   recent(seconds) {
     const want = Math.floor(this.rate * seconds);

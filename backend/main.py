@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import secrets
 from pathlib import Path
 
 import uvicorn
@@ -43,8 +42,11 @@ def _resolve_token(cfg, db_dir: Path) -> str | None:
         return cfg.server.auth_token
     token_file = db_dir / "auth_token.txt"
     if token_file.exists():
-        return token_file.read_text(encoding="utf-8").strip()
-    token = secrets.token_urlsafe(18)
+        existing = token_file.read_text(encoding="utf-8").strip()
+        if len(existing) <= 12:
+            return existing
+    from .settings import generate_token
+    token = generate_token()
     token_file.parent.mkdir(parents=True, exist_ok=True)
     token_file.write_text(token, encoding="utf-8")
     try:

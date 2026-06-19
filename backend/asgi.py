@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 import os
-import secrets
 from pathlib import Path
 
 from .config import load_config
@@ -21,7 +20,7 @@ from .metadata.musicbrainz import MusicBrainzClient
 from .recognition.models import TrackIndex
 from .recognition.olaf import OlafRecognizer
 from .server import create_app
-from .settings import SettingsManager
+from .settings import SettingsManager, generate_token
 from .state import StateManager
 
 log = logging.getLogger("vinyl")
@@ -34,8 +33,11 @@ def _resolve_token(cfg, db_dir: Path):
         return cfg.server.auth_token
     token_file = db_dir / "auth_token.txt"
     if token_file.exists():
-        return token_file.read_text(encoding="utf-8").strip()
-    token = secrets.token_urlsafe(18)
+        token = token_file.read_text(encoding="utf-8").strip()
+        # Replace older long tokens with a short, typeable one.
+        if len(token) <= 12:
+            return token
+    token = generate_token()
     token_file.parent.mkdir(parents=True, exist_ok=True)
     token_file.write_text(token, encoding="utf-8")
     try:
@@ -64,6 +66,9 @@ def build_app_from_env():
     cfg.metadata.acoustid_api_key = (
         os.environ.get("ACOUSTID_API_KEY") or cfg.metadata.acoustid_api_key
     )
+    # Optionally pin your own short, memorable access token.
+    if os.environ.get("AUTH_TOKEN"):
+        cfg.server.auth_token = os.environ["AUTH_TOKEN"]
 
     db_dir = Path(cfg.recognition.olaf_db).parent
     art_dir = db_dir / "art"

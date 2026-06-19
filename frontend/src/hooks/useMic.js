@@ -48,6 +48,8 @@ export function useMic(onAuthError) {
 
   const [micActive, setMicActive] = useState(false);
   const [enrolling, setEnrolling] = useState(false);
+  const [identifying, setIdentifying] = useState(false);
+  const [level, setLevel] = useState(0);
   const [error, setError] = useState("");
   const [lastIdentified, setLastIdentified] = useState(null);
 
@@ -92,11 +94,14 @@ export function useMic(onAuthError) {
     const clip = eng.recent(IDENTIFY_SEC);
     if (clip.length < eng.rate * 12) return; // need a longer clip to identify
     const wav = encodeWav16(downsample(clip, eng.rate), TARGET_RATE);
+    setIdentifying(true);
     try {
       const res = await api.postBytes("/api/identify", wav);
       if (res && res.album) setLastIdentified(res.album);
     } catch (e) {
       handleErr(e);
+    } finally {
+      setIdentifying(false);
     }
   }, [handleErr]);
 
@@ -217,6 +222,18 @@ export function useMic(onAuthError) {
   const stopEnroll = useCallback(() => finishEnroll(false), [finishEnroll]);
   const cancelEnroll = useCallback(() => finishEnroll(true), [finishEnroll]);
 
+  // Poll the input level for the meter while the mic is active.
+  useEffect(() => {
+    if (!micActive) {
+      setLevel(0);
+      return;
+    }
+    const id = setInterval(() => {
+      setLevel(engine.current ? engine.current.level() : 0);
+    }, 150);
+    return () => clearInterval(id);
+  }, [micActive]);
+
   // Pause recognition uploads while backgrounded; resume on return.
   useEffect(() => {
     const onVis = async () => {
@@ -239,6 +256,8 @@ export function useMic(onAuthError) {
   return {
     micActive,
     enrolling,
+    identifying,
+    level,
     error,
     lastIdentified,
     clearError: () => setError(""),

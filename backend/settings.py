@@ -9,10 +9,19 @@ a restart.
 
 from __future__ import annotations
 
+import secrets
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+
+# Short, unambiguous alphabet for the auto-generated access token (no 0/O/1/l).
+_TOKEN_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+
+
+def generate_token(length: int = 6) -> str:
+    """A short token that's quick to type by hand on a LAN-only app."""
+    return "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(length))
 
 # Dotted keys the UI is allowed to manage. Everything else (host/port, auth
 # token, paths, samplerate, ...) stays file-only on purpose.

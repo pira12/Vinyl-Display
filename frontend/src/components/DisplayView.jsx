@@ -7,13 +7,7 @@ function fmt(ms) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-const STATUS_TEXT = {
-  unknown: "Unknown record",
-  paused: "Paused",
-  listening: "Listening…",
-};
-
-export default function DisplayView({ state }) {
+export default function DisplayView({ state, mic }) {
   const [pos, setPos] = useState(0);
   const raf = useRef(null);
 
@@ -28,12 +22,44 @@ export default function DisplayView({ state }) {
 
   const playing = state && state.status === "playing" && state.track;
   if (!playing) {
-    const text = (state && STATUS_TEXT[state.status]) || "Waiting for a record…";
+    const active = mic && mic.micActive;
+    const identifying = mic && mic.identifying;
+    const text = identifying
+      ? "Identifying record…"
+      : active
+        ? "Listening for a record…"
+        : "Microphone off";
+    const sub = active
+      ? "Keep the iPad near the speaker"
+      : "Open Collection and tap Start to listen";
     return (
       <div className="fixed inset-0 z-[3] flex items-center justify-center bg-bg">
         <div className="text-center text-muted">
           <div className="disc mx-auto h-40 w-40" />
-          <p className="mt-8 text-2xl tracking-wide">{text}</p>
+          <div className="mt-8 flex items-center justify-center gap-3">
+            <span className="relative flex h-3 w-3">
+              {active && (
+                <span
+                  className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-70"
+                  style={{ background: "var(--accent)" }}
+                />
+              )}
+              <span
+                className="relative inline-flex h-3 w-3 rounded-full"
+                style={{ background: active ? "var(--accent)" : "#555" }}
+              />
+            </span>
+            <p className="text-2xl tracking-wide">{text}</p>
+          </div>
+          <p className="mt-2 text-sm">{sub}</p>
+          {active && (
+            <div className="mx-auto mt-5 h-1 w-40 overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-full rounded-full transition-[width] duration-150"
+                style={{ width: `${Math.round((mic.level || 0) * 100)}%`, background: "var(--accent)" }}
+              />
+            </div>
+          )}
         </div>
       </div>
     );
