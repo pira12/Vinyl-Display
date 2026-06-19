@@ -55,7 +55,7 @@ export default function App() {
       <div className="relative z-[2]">
         <ModeBar mode={mode} setMode={setMode} hideInDisplay={mode === "display"} />
         {mode === "display" ? (
-          <DisplayView state={state} />
+          <DisplayView state={state} mic={mic} />
         ) : (
           <CollectionView
             state={state}
