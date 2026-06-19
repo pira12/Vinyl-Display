@@ -62,6 +62,47 @@ def publish_resolved(state: StateManager, r: Resolved) -> None:
     )
 
 
+def publish_album_track(state: StateManager, album, idx: int,
+                        position_ms: int = 0) -> None:
+    """Show an album track on the display without an Olaf side reference.
+
+    Used by AcoustID auto-label: we know the album + which track, but not the
+    in-track position, so position starts at 0 (best-effort, no precise sync).
+    """
+    tl = album.tracklist
+    if not tl:
+        return
+    idx = max(0, min(idx, len(tl) - 1))
+    t = tl[idx]
+    track = {
+        "title": t.title,
+        "artist": album.artist,
+        "position": t.position,
+        "number": t.number,
+        "duration_ms": t.length_ms,
+    }
+    album_d = {
+        "title": album.title,
+        "artist": album.artist,
+        "year": album.year,
+        "art_url": _art_url(album.art_path),
+    }
+    tracklist = [
+        {"position": x.position, "number": x.number, "title": x.title,
+         "length_ms": x.length_ms}
+        for x in tl
+    ]
+    next_track = None
+    if idx + 1 < len(tl):
+        next_track = {"title": tl[idx + 1].title, "position": tl[idx + 1].position}
+    state.current_ident = None
+    state.set_now_playing(
+        track=track, album=album_d, tracklist=tracklist, current_index=idx,
+        next_track=next_track, lyrics=t.lyrics or {"synced": False, "lines": []},
+        position_ms=position_ms,
+    )
+
+
 def apply_match(state: StateManager, index: TrackIndex,
                 match: Optional[Match]) -> Optional[Resolved]:
     """Resolve a match and update shared state, deduping repeat hits.

@@ -18,6 +18,12 @@ export class MicEngine {
 
   async start() {
     if (this.ctx) return;
+    // Create + resume the context FIRST, synchronously inside the user gesture.
+    // If we await getUserMedia first, iOS no longer treats this as
+    // user-activated and leaves the context suspended, so no audio is captured.
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    this.ctx = new Ctx();
+    const resumed = this.ctx.resume();
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: false,
@@ -26,9 +32,7 @@ export class MicEngine {
         channelCount: 1,
       },
     });
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    this.ctx = new Ctx();
-    await this.ctx.resume();
+    await resumed;
     this.rate = this.ctx.sampleRate;
     await this.ctx.audioWorklet.addModule("/worklet/pcm-processor.js");
     this.source = this.ctx.createMediaStreamSource(this.stream);

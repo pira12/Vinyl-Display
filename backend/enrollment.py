@@ -72,7 +72,7 @@ class EnrollmentService:
         # one blocking call after another (a 12-track album was ~12 serial
         # LRCLIB round-trips). A semaphore keeps us polite to LRCLIB.
         empty = {"synced": False, "lines": []}
-        sem = asyncio.Semaphore(8)
+        sem = asyncio.Semaphore(2)  # LRCLIB returns 429 if hit too hard
 
         async def fetch_lyrics(t):
             if not self.cfg.lyrics.enabled:
