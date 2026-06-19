@@ -244,13 +244,20 @@ export function useMic(onAuthError) {
     return () => clearInterval(id);
   }, [micActive]);
 
-  // Pause recognition uploads while backgrounded; resume on return.
+  // Keep a ref to the latest scheduler so the mount-only effect below can call
+  // it without re-subscribing (which would tear down the engine on re-render).
+  const scheduleRef = useRef(scheduleRecognize);
+  scheduleRef.current = scheduleRecognize;
+
+  // Mount/unmount ONLY. Previously this depended on callbacks whose identity
+  // changed every render (the level meter re-renders constantly), so the
+  // cleanup ran repeatedly and stopped the mic right after it started.
   useEffect(() => {
     const onVis = async () => {
       if (!document.hidden && micActiveRef.current) {
         await acquireWakeLock(); // wake locks drop when backgrounded
         if (engine.current) await engine.current.resume();
-        scheduleRecognize(FAST_MS);
+        scheduleRef.current(FAST_MS);
       }
     };
     document.addEventListener("visibilitychange", onVis);
@@ -261,7 +268,8 @@ export function useMic(onAuthError) {
       releaseWakeLock();
       if (engine.current) engine.current.stop();
     };
-  }, [scheduleRecognize, acquireWakeLock, releaseWakeLock]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return {
     micActive,
