@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .enrollment import EnrollmentService
 from .recognition.models import TrackIndex
-from .recognition.recognizer import apply_match
+from .recognition.recognizer import apply_match, publish_album_track
 from .settings import SettingsError
 from .state import StateManager
 
@@ -187,6 +187,14 @@ def create_app(state: StateManager, index: TrackIndex,
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"available": True, "match": match,
                                  "error": str(exc)})
+        # Show the identified track on the display straight away (best-effort,
+        # no in-track position from AcoustID).
+        album_obj = index.albums.get(match["release_mbid"])
+        if album_obj:
+            want = (match.get("title") or "").lower()
+            idx = next((i for i, t in enumerate(album_obj.tracklist)
+                        if want and want in (t.title or "").lower()), 0)
+            publish_album_track(state, album_obj, idx)
         return JSONResponse({"available": True, "match": match, "album": album,
                              "sides": enrollment.sides_for(match["release_mbid"])})
 

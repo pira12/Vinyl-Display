@@ -75,18 +75,25 @@ class LyricsClient:
 
     async def _request(self, path: str, params: Dict[str, Any]) -> Optional[dict]:
         headers = {"User-Agent": self.user_agent}
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(
-                    f"{LRCLIB_BASE}{path}", params=params, headers=headers
-                )
-                if resp.status_code == 404:
-                    return None
-                resp.raise_for_status()
-                return resp.json()
-        except Exception as exc:  # noqa: BLE001
-            log.warning("LRCLIB request failed: %s", exc)
-            return None
+        import asyncio
+
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.get(
+                        f"{LRCLIB_BASE}{path}", params=params, headers=headers
+                    )
+                    if resp.status_code == 404:
+                        return None
+                    if resp.status_code == 429:  # rate-limited: back off and retry
+                        await asyncio.sleep(0.6 * (attempt + 1))
+                        continue
+                    resp.raise_for_status()
+                    return resp.json()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("LRCLIB request failed: %s", exc)
+                return None
+        return None
 
     async def _search(self, artist: str, title: str) -> Optional[dict]:
         results = await self._request(
