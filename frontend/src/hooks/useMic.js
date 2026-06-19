@@ -7,6 +7,9 @@ const QUERY_SEC = 10;     // how much recent audio to send per recognition
 const FAST_MS = 3000;     // cadence before a track locks
 const SLOW_MS = 12000;    // cadence once locked (just drift correction)
 const CHUNK_MS = 1000;    // enrollment upload cadence
+const IDENTIFY_SEC = 25;          // clip length for an AcoustID auto-label
+const IDENTIFY_AFTER_MISSES = 4;  // consecutive Olaf misses before trying AcoustID
+const IDENTIFY_COOLDOWN_MS = 60000; // don't hammer the free AcoustID quota
 
 // Single shared mic engine coordinating recognition and enrollment so they
 // never open two mic streams at once.
@@ -40,9 +43,13 @@ export function useMic(onAuthError) {
     wakeLock.current = null;
   }, []);
 
+  const missCount = useRef(0);
+  const lastIdentifyAt = useRef(0);
+
   const [micActive, setMicActive] = useState(false);
   const [enrolling, setEnrolling] = useState(false);
   const [error, setError] = useState("");
+  const [lastIdentified, setLastIdentified] = useState(null);
 
   const ensureEngine = useCallback(async () => {
     if (!engine.current) engine.current = new MicEngine();
@@ -74,6 +81,25 @@ export function useMic(onAuthError) {
     }
   }, [handleErr]);
 
+  // Best-effort auto-label via AcoustID after Olaf keeps missing. Rate-limited
+  // by a cooldown so it stays within the free AcoustID quota.
+  const identifyOnce = useCallback(async () => {
+    const eng = engine.current;
+    if (!eng || !eng.active) return;
+    const now = Date.now();
+    if (now - lastIdentifyAt.current < IDENTIFY_COOLDOWN_MS) return;
+    lastIdentifyAt.current = now;
+    const clip = eng.recent(IDENTIFY_SEC);
+    if (clip.length < eng.rate * 12) return; // need a longer clip to identify
+    const wav = encodeWav16(downsample(clip, eng.rate), TARGET_RATE);
+    try {
+      const res = await api.postBytes("/api/identify", wav);
+      if (res && res.album) setLastIdentified(res.album);
+    } catch (e) {
+      handleErr(e);
+    }
+  }, [handleErr]);
+
   const scheduleRecognize = useCallback(
     (delay) => {
       clearTimeout(recTimer.current);
@@ -82,11 +108,16 @@ export function useMic(onAuthError) {
         let matched = false;
         if (!enrollingRef.current && !document.hidden) {
           matched = await recognizeOnce();
+          if (matched) {
+            missCount.current = 0;
+          } else if (++missCount.current >= IDENTIFY_AFTER_MISSES) {
+            identifyOnce(); // fire and forget; cooldown guards the quota
+          }
         }
         if (micActiveRef.current) scheduleRecognize(matched ? SLOW_MS : FAST_MS);
       }, delay);
     },
-    [recognizeOnce]
+    [recognizeOnce, identifyOnce]
   );
 
   const startListening = useCallback(async () => {
@@ -209,6 +240,7 @@ export function useMic(onAuthError) {
     micActive,
     enrolling,
     error,
+    lastIdentified,
     clearError: () => setError(""),
     toggleListening,
     startEnroll,

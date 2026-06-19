@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .config import load_config
 from .enrollment import EnrollmentService
+from .metadata.acoustid import AcoustIDClient
 from .metadata.lyrics import LyricsClient
 from .metadata.musicbrainz import MusicBrainzClient
 from .recognition.models import TrackIndex
@@ -60,6 +61,9 @@ def build_app_from_env():
     cfg.recognition.backend = "olaf"
     cfg.recognition.olaf_db = str(data_dir / "olaf" / "db")
     cfg.metadata.cache_dir = str(data_dir / "cache")
+    cfg.metadata.acoustid_api_key = (
+        os.environ.get("ACOUSTID_API_KEY") or cfg.metadata.acoustid_api_key
+    )
 
     db_dir = Path(cfg.recognition.olaf_db).parent
     art_dir = db_dir / "art"
@@ -80,14 +84,17 @@ def build_app_from_env():
     settings = SettingsManager(
         cfg, config_path, state=state, backend=backend, mb=mb, lyrics=lyrics
     )
+    acoustid = AcoustIDClient(cfg.metadata.acoustid_api_key)
     token = _resolve_token(cfg, db_dir)
 
     tmp_dir = "/dev/shm" if Path("/dev/shm").exists() else None
-    log.info("Vinyl Display server ready (data=%s)", data_dir)
+    log.info("Vinyl Display server ready (data=%s, auto-label=%s)",
+             data_dir, "on" if acoustid.available else "off")
     if token:
         log.info("Companion token: append ?token=%s once on your device.", token)
     return create_app(state, index, enrollment, art_dir=str(art_dir),
-                      auth_token=token, settings=settings, tmp_dir=tmp_dir)
+                      auth_token=token, settings=settings, tmp_dir=tmp_dir,
+                      acoustid=acoustid)
 
 
 app = build_app_from_env()

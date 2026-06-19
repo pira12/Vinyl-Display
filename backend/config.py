@@ -51,6 +51,7 @@ class RecognitionConfig:
 class MetadataConfig:
     musicbrainz_useragent: str = "VinylDisplay/0.1 ( you@example.com )"
     cache_dir: str = "~/.cache/vinyl-display"
+    acoustid_api_key: Optional[str] = None   # free key from acoustid.org; enables auto-label
 
     def __post_init__(self) -> None:
         self.cache_dir = _expand(self.cache_dir)

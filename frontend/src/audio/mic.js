@@ -9,7 +9,7 @@ export class MicEngine {
     this.ringLen = 0;
     this.accum = null;     // when non-null, accumulate everything for enrollment
     this.rate = 48000;
-    this.maxRingSec = 12;
+    this.maxRingSec = 30; // enough recent audio for an AcoustID identify clip
   }
 
   get active() {

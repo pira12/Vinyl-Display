@@ -30,7 +30,8 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 def create_app(state: StateManager, index: TrackIndex,
                enrollment: EnrollmentService, art_dir: str,
                auth_token: Optional[str] = None,
-               settings=None, tmp_dir: Optional[str] = None) -> FastAPI:
+               settings=None, tmp_dir: Optional[str] = None,
+               acoustid=None) -> FastAPI:
     tmp_dir = tmp_dir or tempfile.gettempdir()
 
     @asynccontextmanager
@@ -166,6 +167,28 @@ def create_app(state: StateManager, index: TrackIndex,
             "matched": resolved is not None,
             "track": state.track,
         })
+
+    # Auto-label: identify an unknown record via AcoustID and cache its album,
+    # so the user doesn't have to search for it. Best-effort from a room mic.
+    @app.post("/api/identify")
+    async def api_identify(request: Request) -> JSONResponse:
+        if acoustid is None or not acoustid.available:
+            return JSONResponse({"available": False, "match": None})
+        data = await request.body()
+        if not data:
+            return JSONResponse({"error": "no audio"}, status_code=400)
+        clip = Path(tmp_dir) / "vinyl-identify.wav"
+        await asyncio.to_thread(clip.write_bytes, data)
+        match = await acoustid.identify(str(clip))
+        if not match:
+            return JSONResponse({"available": True, "match": None})
+        try:
+            album = await enrollment.add_album(match["release_mbid"])
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"available": True, "match": match,
+                                 "error": str(exc)})
+        return JSONResponse({"available": True, "match": match, "album": album,
+                             "sides": enrollment.sides_for(match["release_mbid"])})
 
     # ---- listening control ----
     @app.post("/api/listen")

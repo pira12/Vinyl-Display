@@ -112,3 +112,22 @@ def test_record_start_requires_token(tmp_path):
     client, _, _, _ = _app(tmp_path)
     assert client.post("/api/record/start",
                        json={"album_id": "x", "side": "A"}).status_code == 401
+
+
+# -- auto-label (AcoustID) --------------------------------------------------
+
+def test_identify_unavailable_without_key(tmp_path):
+    # No AcoustID client wired -> endpoint degrades gracefully, not an error.
+    client, _, _, _ = _app(tmp_path)
+    r = client.post("/api/identify", headers=H, content=b"RIFFfake")
+    assert r.status_code == 200
+    assert r.json()["available"] is False
+
+
+def test_acoustid_client_reports_availability():
+    from backend.metadata.acoustid import AcoustIDClient
+
+    assert AcoustIDClient(None).available is False  # no key
+    # With a key, availability still depends on fpcalc being installed.
+    c = AcoustIDClient("somekey")
+    assert c.available == bool(c.fpcalc)

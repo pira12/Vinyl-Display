@@ -38,6 +38,14 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
     refresh();
   }, [refresh]);
 
+  // When AcoustID auto-labels an unknown record, surface it and refresh.
+  useEffect(() => {
+    if (mic.lastIdentified) {
+      toast(`Identified: ${mic.lastIdentified.title} — play a side to learn it`);
+      refresh();
+    }
+  }, [mic.lastIdentified, refresh, toast]);
+
   async function search() {
     const q = query.trim();
     if (!q) return;
