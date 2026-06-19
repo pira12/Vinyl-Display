@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { loadToken } from "./api.js";
 import { useNowPlaying } from "./hooks/useNowPlaying.js";
 import { useMic } from "./hooks/useMic.js";
@@ -21,7 +21,9 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [authNeeded, setAuthNeeded] = useState(false);
   const state = useNowPlaying();
-  const mic = useMic(() => setAuthNeeded(true));
+  // Stable identity so useMic's effects don't re-subscribe on every render.
+  const onAuthError = useCallback(() => setAuthNeeded(true), []);
+  const mic = useMic(onAuthError);
 
   useEffect(() => {
     loadToken();
