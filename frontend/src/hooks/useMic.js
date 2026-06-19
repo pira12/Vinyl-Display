@@ -52,6 +52,7 @@ export function useMic(onAuthError) {
   const [level, setLevel] = useState(0);
   const [error, setError] = useState("");
   const [lastIdentified, setLastIdentified] = useState(null);
+  const [debug, setDebug] = useState({ sent: 0, last: "idle" });
 
   const ensureEngine = useCallback(async () => {
     if (!engine.current) engine.current = new MicEngine();
@@ -69,15 +70,24 @@ export function useMic(onAuthError) {
   // --- recognition loop ---
   const recognizeOnce = useCallback(async () => {
     const eng = engine.current;
-    if (!eng || !eng.active) return false;
+    if (!eng || !eng.active) {
+      setDebug((d) => ({ ...d, last: "no engine" }));
+      return false;
+    }
     await eng.resume(); // re-arm if iOS suspended the context
     const clip = eng.recent(QUERY_SEC);
-    if (clip.length < eng.rate * 4) return false; // need a few seconds first
+    if (clip.length < eng.rate * 4) {
+      setDebug((d) => ({ ...d, last: "buffering" }));
+      return false; // need a few seconds first
+    }
     const wav = encodeWav16(downsample(clip, eng.rate), TARGET_RATE);
     try {
       const res = await api.postBytes("/api/recognize", wav);
-      return !!(res && res.matched);
+      const matched = !!(res && res.matched);
+      setDebug((d) => ({ sent: d.sent + 1, last: matched ? "match" : "no match" }));
+      return matched;
     } catch (e) {
+      setDebug((d) => ({ sent: d.sent + 1, last: "error" }));
       handleErr(e);
       return false;
     }
@@ -258,6 +268,7 @@ export function useMic(onAuthError) {
     enrolling,
     identifying,
     level,
+    debug,
     error,
     lastIdentified,
     clearError: () => setError(""),
