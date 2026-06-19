@@ -86,17 +86,11 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Animated "listening" equalizer: bars breathe on their own (so it always
-   reads as live), and the container scales with the real input level. */
+/* Listening equalizer: bars are driven purely by the real input level, so they
+   stay flat in silence and rise only when the mic actually hears sound. */
 .eq-bar {
-  width: 3px;
-  height: 100%;
+  width: 4px;
   border-radius: 2px;
   background: var(--accent);
-  transform-origin: bottom;
-  animation: eqIdle 900ms ease-in-out infinite;
-}
-@keyframes eqIdle {
-  0%, 100% { transform: scaleY(0.3); }
-  50% { transform: scaleY(1); }
+  transition: height 120ms ease-out;
 }
