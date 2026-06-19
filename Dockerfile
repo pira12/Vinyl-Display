@@ -28,13 +28,17 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---- stage 3: slim Python runtime (no audio capture) ----
-FROM python:3.13-slim-trixie
+# Python 3.12 + numpy<2: numpy 2.x manylinux wheels require the x86-64-v2 CPU
+# baseline, which older hosts lack; numpy 1.26 targets the older baseline but
+# has no wheels for 3.13, hence 3.12. Still Debian trixie so glibc matches the
+# Olaf binary built above.
+FROM python:3.12-slim-trixie
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ffmpeg libsndfile1 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 RUN pip install --no-cache-dir \
       "fastapi>=0.110" "uvicorn[standard]>=0.29" "httpx>=0.27" \
-      "PyYAML>=6.0" "numpy>=1.24" "soundfile>=0.12"
+      "PyYAML>=6.0" "numpy>=1.26,<2" "soundfile>=0.12"
 COPY --from=olaf /usr/local/bin/olaf /usr/local/bin/olaf
 COPY backend/ ./backend/
 COPY --from=web /web/dist ./frontend/dist
