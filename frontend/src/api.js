@@ -47,6 +47,8 @@ async function request(path, { method = "GET", json, body, headers } = {}) {
 export const api = {
   get: (p) => request(p),
   postJson: (p, json) => request(p, { method: "POST", json }),
+  patchJson: (p, json) => request(p, { method: "PATCH", json }),
+  del: (p) => request(p, { method: "DELETE" }),
   postBytes: (p, bytes) =>
     request(p, { method: "POST", body: bytes, headers: { "Content-Type": "application/octet-stream" } }),
 };

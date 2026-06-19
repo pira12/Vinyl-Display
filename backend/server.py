@@ -120,6 +120,27 @@ def create_app(state: StateManager, index: TrackIndex,
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse({"album": album, "sides": enrollment.sides_for(mbid)})
 
+    @app.patch("/api/albums/{album_id}")
+    async def api_edit_album(album_id: str, request: Request) -> JSONResponse:
+        body = await request.json() or {}
+        try:
+            album = enrollment.update_album(album_id, body)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"album": album})
+
+    @app.delete("/api/albums/{album_id}")
+    async def api_delete_album(album_id: str) -> JSONResponse:
+        try:
+            enrollment.delete_album(album_id)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"deleted": album_id})
+
     # Enrollment: the iPad mic streams a whole side here as raw PCM chunks.
     @app.post("/api/record/start")
     async def api_record_start(request: Request) -> JSONResponse:

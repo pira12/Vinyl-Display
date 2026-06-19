@@ -114,24 +114,53 @@ class MusicBrainzClient:
         return data["releases"][0]["id"]
 
     async def search_releases(self, query: str, limit: int = 12) -> List[Dict[str, Any]]:
-        """Free-text release search for the companion app (artist + album)."""
+        """Free-text release search for the companion app (artist + album).
+
+        MusicBrainz returns one row per *pressing*, so a popular album shows up
+        many times (different countries/editions). We collapse to one row per
+        release-group, keeping the best edition (Official + has cover art + a
+        date), and preserve MusicBrainz's relevance order across groups.
+        """
         data = await self._get(
             f"{MB_BASE}/release",
-            {"query": query, "fmt": "json", "limit": limit},
+            {"query": query, "fmt": "json", "limit": max(limit * 2, 25)},
         )
-        results: List[Dict[str, Any]] = []
+        groups: Dict[str, tuple[int, Dict[str, Any]]] = {}
+        order: List[str] = []
         for rel in (data or {}).get("releases", []):
-            artist = "".join(
-                ac.get("name", "") + ac.get("joinphrase", "")
-                for ac in rel.get("artist-credit", [])
-            )
-            results.append({
-                "release_mbid": rel["id"],
-                "title": rel.get("title", ""),
-                "artist": artist,
-                "year": (rel.get("date") or "")[:4],
-                "tracks": rel.get("track-count"),
-                "country": rel.get("country"),
-                "art_url": f"{CAA_BASE}/release/{rel['id']}/front-250",
-            })
-        return results
+            rg_id = (rel.get("release-group") or {}).get("id") or rel["id"]
+            rank = self._release_rank(rel)
+            if rg_id not in groups:
+                groups[rg_id] = (rank, self._release_row(rel))
+                order.append(rg_id)
+            elif rank > groups[rg_id][0]:
+                groups[rg_id] = (rank, self._release_row(rel))
+        return [groups[g][1] for g in order][:limit]
+
+    @staticmethod
+    def _release_rank(rel: Dict[str, Any]) -> int:
+        """Higher is a better edition to represent its release-group."""
+        rank = 0
+        if (rel.get("status") or "").lower() == "official":
+            rank += 4
+        if (rel.get("cover-art-archive") or {}).get("front"):
+            rank += 2
+        if rel.get("date"):
+            rank += 1
+        return rank
+
+    @staticmethod
+    def _release_row(rel: Dict[str, Any]) -> Dict[str, Any]:
+        artist = "".join(
+            ac.get("name", "") + ac.get("joinphrase", "")
+            for ac in rel.get("artist-credit", [])
+        )
+        return {
+            "release_mbid": rel["id"],
+            "title": rel.get("title", ""),
+            "artist": artist,
+            "year": (rel.get("date") or "")[:4],
+            "tracks": rel.get("track-count"),
+            "country": rel.get("country"),
+            "art_url": f"{CAA_BASE}/release/{rel['id']}/front-250",
+        }
