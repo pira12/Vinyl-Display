@@ -13,6 +13,7 @@ two halves:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from pathlib import Path
@@ -67,24 +68,41 @@ class EnrollmentService:
         if not release:
             raise ValueError("could not fetch release from MusicBrainz")
 
-        tracklist: List[AlbumTrack] = []
-        for t in release["tracklist"]:
-            lyr = {"synced": False, "lines": []}
-            if self.cfg.lyrics.enabled:
-                dur = (t.get("length_ms") or 0) / 1000.0 or None
-                lyr = await self.lyrics.get(
-                    release["artist"], t["title"], release["title"], dur
-                )
-            tracklist.append(AlbumTrack(
+        # Fetch all per-track lyrics and the cover art concurrently instead of
+        # one blocking call after another (a 12-track album was ~12 serial
+        # LRCLIB round-trips). A semaphore keeps us polite to LRCLIB.
+        empty = {"synced": False, "lines": []}
+        sem = asyncio.Semaphore(8)
+
+        async def fetch_lyrics(t):
+            if not self.cfg.lyrics.enabled:
+                return empty
+            dur = (t.get("length_ms") or 0) / 1000.0 or None
+            async with sem:
+                try:
+                    return await self.lyrics.get(
+                        release["artist"], t["title"], release["title"], dur
+                    )
+                except Exception:  # noqa: BLE001 - a missing lyric is not fatal
+                    return empty
+
+        tracks = release["tracklist"]
+        lyric_results, art_path = await asyncio.gather(
+            asyncio.gather(*(fetch_lyrics(t) for t in tracks)),
+            self._download_art(release_mbid, release.get("art_url")),
+        )
+
+        tracklist: List[AlbumTrack] = [
+            AlbumTrack(
                 title=t["title"],
                 position=t.get("position"),
                 number=t.get("number"),
                 recording_mbid=t.get("recording_mbid"),
                 length_ms=t.get("length_ms"),
                 lyrics=lyr,
-            ))
-
-        art_path = await self._download_art(release_mbid, release.get("art_url"))
+            )
+            for t, lyr in zip(tracks, lyric_results)
+        ]
         album = Album(
             id=release_mbid,
             title=release["title"],

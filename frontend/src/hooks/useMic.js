@@ -16,6 +16,29 @@ export function useMic(onAuthError) {
   const chunkTimer = useRef(null);
   const micActiveRef = useRef(false);
   const enrollingRef = useRef(false);
+  const wakeLock = useRef(null);
+
+  const acquireWakeLock = useCallback(async () => {
+    try {
+      if ("wakeLock" in navigator && !wakeLock.current) {
+        wakeLock.current = await navigator.wakeLock.request("screen");
+        wakeLock.current.addEventListener?.("release", () => {
+          wakeLock.current = null;
+        });
+      }
+    } catch {
+      /* wake lock unsupported or denied — non-fatal */
+    }
+  }, []);
+
+  const releaseWakeLock = useCallback(() => {
+    try {
+      wakeLock.current && wakeLock.current.release();
+    } catch {
+      /* ignore */
+    }
+    wakeLock.current = null;
+  }, []);
 
   const [micActive, setMicActive] = useState(false);
   const [enrolling, setEnrolling] = useState(false);
@@ -38,6 +61,7 @@ export function useMic(onAuthError) {
   const recognizeOnce = useCallback(async () => {
     const eng = engine.current;
     if (!eng || !eng.active) return false;
+    await eng.resume(); // re-arm if iOS suspended the context
     const clip = eng.recent(QUERY_SEC);
     if (clip.length < eng.rate * 4) return false; // need a few seconds first
     const wav = encodeWav16(downsample(clip, eng.rate), TARGET_RATE);
@@ -75,25 +99,27 @@ export function useMic(onAuthError) {
     }
     micActiveRef.current = true;
     setMicActive(true);
+    acquireWakeLock();
     try {
       await api.postJson("/api/listen", { enabled: true });
     } catch (e) {
       handleErr(e);
     }
     scheduleRecognize(FAST_MS);
-  }, [ensureEngine, handleErr, scheduleRecognize]);
+  }, [ensureEngine, handleErr, scheduleRecognize, acquireWakeLock]);
 
   const stopListening = useCallback(async () => {
     micActiveRef.current = false;
     setMicActive(false);
     clearTimeout(recTimer.current);
+    releaseWakeLock();
     try {
       await api.postJson("/api/listen", { enabled: false });
     } catch {
       /* ignore */
     }
     if (!enrollingRef.current && engine.current) engine.current.stop();
-  }, []);
+  }, [releaseWakeLock]);
 
   const toggleListening = useCallback(() => {
     if (micActiveRef.current) stopListening();
@@ -162,17 +188,22 @@ export function useMic(onAuthError) {
 
   // Pause recognition uploads while backgrounded; resume on return.
   useEffect(() => {
-    const onVis = () => {
-      if (!document.hidden && micActiveRef.current) scheduleRecognize(FAST_MS);
+    const onVis = async () => {
+      if (!document.hidden && micActiveRef.current) {
+        await acquireWakeLock(); // wake locks drop when backgrounded
+        if (engine.current) await engine.current.resume();
+        scheduleRecognize(FAST_MS);
+      }
     };
     document.addEventListener("visibilitychange", onVis);
     return () => {
       document.removeEventListener("visibilitychange", onVis);
       clearTimeout(recTimer.current);
       clearInterval(chunkTimer.current);
+      releaseWakeLock();
       if (engine.current) engine.current.stop();
     };
-  }, [scheduleRecognize]);
+  }, [scheduleRecognize, acquireWakeLock, releaseWakeLock]);
 
   return {
     micActive,
