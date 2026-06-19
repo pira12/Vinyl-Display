@@ -85,3 +85,18 @@ body {
 .tabular {
   font-variant-numeric: tabular-nums;
 }
+
+/* Animated "listening" equalizer: bars breathe on their own (so it always
+   reads as live), and the container scales with the real input level. */
+.eq-bar {
+  width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transform-origin: bottom;
+  animation: eqIdle 900ms ease-in-out infinite;
+}
+@keyframes eqIdle {
+  0%, 100% { transform: scaleY(0.3); }
+  50% { transform: scaleY(1); }
+}

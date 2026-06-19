@@ -38,11 +38,17 @@ export default function MicStatus({ mic, state }) {
         <div className="text-sm font-semibold">{label}</div>
         <div className="truncate text-xs text-muted">{sub}</div>
         {mic.micActive && !playing && (
-          <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/10">
-            <div
-              className="h-full rounded-full transition-[width] duration-150"
-              style={{ width: `${Math.round((mic.level || 0) * 100)}%`, background: "var(--accent)" }}
-            />
+          <div
+            className="mt-2 flex h-6 items-end gap-[3px]"
+            style={{
+              transformOrigin: "bottom",
+              transform: `scaleY(${0.35 + Math.min(1, mic.level || 0) * 1.3})`,
+            }}
+            aria-label="listening level"
+          >
+            {Array.from({ length: 22 }).map((_, i) => (
+              <span key={i} className="eq-bar" style={{ animationDelay: `${i * 55}ms` }} />
+            ))}
           </div>
         )}
       </div>
