@@ -40,21 +40,14 @@ export default function MicStatus({ mic, state }) {
         <div className="text-sm font-semibold">{label}</div>
         <div className="truncate text-xs text-muted">{sub}</div>
         {mic.micActive && !playing && (
-          <div
-            className="mt-2 flex h-8 items-end gap-1"
-            style={{
-              transformOrigin: "bottom",
-              transform: `scaleY(${0.55 + Math.min(1, mic.level || 0) * 0.45})`,
-            }}
-            aria-label="listening level"
-          >
-            {Array.from({ length: 18 }).map((_, i) => (
-              <span
-                key={i}
-                className="eq-bar w-1"
-                style={{ animationDelay: `${i * 70}ms` }}
-              />
-            ))}
+          <div className="mt-2 flex h-8 items-end gap-1" aria-label="listening level">
+            {Array.from({ length: 18 }).map((_, i) => {
+              const lvl = mic.level || 0;
+              const center = 1 - Math.abs(i - 8.5) / 9; // peak in the middle
+              const jitter = 0.55 + Math.random() * 0.45;
+              const h = Math.max(2, Math.min(100, lvl * 130 * (0.45 + center) * jitter));
+              return <span key={i} className="eq-bar" style={{ height: `${h}%` }} />;
+            })}
           </div>
         )}
         <div className="mt-2 font-mono text-[10px] text-muted/70">

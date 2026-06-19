@@ -81,7 +81,9 @@ export class MicEngine {
     let sum = 0;
     for (let i = 0; i < recent.length; i++) sum += recent[i] * recent[i];
     const rms = Math.sqrt(sum / recent.length);
-    return Math.min(1, rms * 4); // scale so normal listening lands mid-meter
+    // Room-mic RMS is small; a sqrt (perceptual) curve makes the meter actually
+    // move at realistic levels instead of hugging zero.
+    return Math.min(1, Math.sqrt(rms) * 3);
   }
 
   // Most recent `seconds` of audio at the capture rate.
