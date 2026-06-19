@@ -61,11 +61,21 @@ def create_app(state: StateManager, index: TrackIndex,
     web_dir = Path(os.environ.get("FRONTEND_DIST", FRONTEND_DIR / "dist"))
     index_file = web_dir / "index.html"
 
+    # Serve index.html with no-cache so a redeploy's new hashed assets are
+    # always picked up (the hashed assets themselves can be cached forever).
+    _no_cache = {"Cache-Control": "no-cache, must-revalidate"}
+
+    @app.get("/")
+    async def index_page():
+        if index_file.exists():
+            return FileResponse(index_file, headers=_no_cache)
+        return JSONResponse({"error": "frontend not built"}, status_code=404)
+
     @app.get("/manage")
     async def manage_page():
         # Same SPA; the frontend opens straight into Collection mode.
         if index_file.exists():
-            return FileResponse(index_file)
+            return FileResponse(index_file, headers=_no_cache)
         return JSONResponse({"error": "frontend not built"}, status_code=404)
 
     @app.get("/healthz")

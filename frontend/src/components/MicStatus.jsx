@@ -39,15 +39,19 @@ export default function MicStatus({ mic, state }) {
         <div className="truncate text-xs text-muted">{sub}</div>
         {mic.micActive && !playing && (
           <div
-            className="mt-2 flex h-6 items-end gap-[3px]"
+            className="mt-2 flex h-8 items-end gap-1"
             style={{
               transformOrigin: "bottom",
-              transform: `scaleY(${0.35 + Math.min(1, mic.level || 0) * 1.3})`,
+              transform: `scaleY(${0.55 + Math.min(1, mic.level || 0) * 0.45})`,
             }}
             aria-label="listening level"
           >
-            {Array.from({ length: 22 }).map((_, i) => (
-              <span key={i} className="eq-bar" style={{ animationDelay: `${i * 55}ms` }} />
+            {Array.from({ length: 18 }).map((_, i) => (
+              <span
+                key={i}
+                className="eq-bar w-1"
+                style={{ animationDelay: `${i * 70}ms` }}
+              />
             ))}
           </div>
         )}
