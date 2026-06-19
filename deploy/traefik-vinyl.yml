@@ -1,0 +1,21 @@
+# Traefik dynamic config for Vinyl Display, when Traefik runs on a separate box
+# from Dokploy. Add this via Traefik's file provider (e.g. drop it in the
+# directory your file provider watches, or merge into your existing dynamic
+# config). Adjust the entryPoint and certResolver names to match your setup,
+# and the backend IP/port to your Dokploy host + published port.
+http:
+  routers:
+    vinyl:
+      rule: "Host(`vinyl.ossolab.net`)"
+      entryPoints:
+        - websecure          # your HTTPS entrypoint (often "websecure" or "https")
+      service: vinyl
+      tls:
+        certResolver: letsencrypt   # the resolver your other *.ossolab.net use
+
+  services:
+    vinyl:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.1.161:8080"   # Dokploy host + published port
+        passHostHeader: true
