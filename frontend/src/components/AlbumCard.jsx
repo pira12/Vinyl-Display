@@ -1,10 +1,14 @@
 // One album as a square vinyl cover with title/info below and per-side record
 // buttons. Shows a spinner overlay while busy (enrolling a side).
-export default function AlbumCard({ album, canRecord, busySide, onRecord }) {
+export default function AlbumCard({ album, canRecord, busySide, onRecord, onOpen }) {
   const sides = sidesOf(album);
   return (
     <div className="flex flex-col">
-      <div className="relative aspect-square w-full overflow-hidden rounded-md bg-[#1a1a20]">
+      <button
+        type="button"
+        onClick={() => onOpen && onOpen(album.id)}
+        className="relative aspect-square w-full overflow-hidden rounded-md bg-[#1a1a20] text-left"
+      >
         {album.art_url ? (
           <img src={album.art_url} alt="" className="h-full w-full object-cover" />
         ) : (
@@ -17,13 +21,19 @@ export default function AlbumCard({ album, canRecord, busySide, onRecord }) {
             <div className="spinner h-8 w-8" />
           </div>
         )}
-      </div>
+      </button>
       <div className="mt-2 min-w-0">
-        <div className="truncate font-semibold">{album.title}</div>
-        <div className="truncate text-sm text-muted">
-          {album.artist}
-          {album.year ? ` · ${album.year}` : ""} · {album.track_count} tracks
-        </div>
+        <button
+          type="button"
+          onClick={() => onOpen && onOpen(album.id)}
+          className="block w-full text-left"
+        >
+          <div className="truncate font-semibold">{album.title}</div>
+          <div className="truncate text-sm text-muted">
+            {album.artist}
+            {album.year ? ` · ${album.year}` : ""} · {album.track_count} tracks
+          </div>
+        </button>
         <div className="mt-2 flex flex-wrap gap-1.5">
           {sides.map((side) => {
             const done = (album.enrolled_sides || []).includes(side);

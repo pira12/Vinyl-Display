@@ -54,6 +54,23 @@ class OlafRecognizer:
             text=True,
         )
 
+    def delete(self, wav_path: str) -> None:
+        """Remove a reference's fingerprints from the database (best-effort).
+
+        Used when deleting an album or re-recording a side. Some Olaf builds
+        lack a ``delete`` verb; the index is the source of truth, so a failure
+        here only leaves a harmless stale fingerprint that resolves to nothing.
+        """
+        try:
+            subprocess.run(
+                [self.olaf_bin, "delete", str(wav_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("olaf delete failed for %s: %s", wav_path, exc)
+
     def query(self, wav_path: str) -> Optional[Match]:
         """Identify a query clip; return the best match above ``min_score``."""
         try:

@@ -155,6 +155,43 @@ class EnrollmentService:
     def collection(self) -> List[Dict[str, Any]]:
         return [self.album_summary(a) for a in self.index.albums.values()]
 
+    # -- editing & removal ---------------------------------------------------
+    _EDITABLE = ("title", "artist", "year")
+
+    def update_album(self, album_id: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        """Edit an album's title/artist/year. Other keys are ignored."""
+        album = self.index.albums.get(album_id)
+        if album is None:
+            raise ValueError("unknown album")
+        for k in self._EDITABLE:
+            if k in fields and fields[k] is not None:
+                setattr(album, k, str(fields[k]).strip())
+        self.index.save()
+        log.info("edited album %s: %s — %s", album_id, album.artist, album.title)
+        return self.album_summary(album)
+
+    def delete_album(self, album_id: str) -> None:
+        """Remove an album, its enrolled sides, ref recordings, and cached art.
+
+        Index removal is authoritative: even if Olaf keeps a fingerprint, a
+        match to a deleted side resolves to nothing.
+        """
+        album = self.index.albums.pop(album_id, None)
+        if album is None:
+            raise ValueError("unknown album")
+        for key, side in list(self.index.sides.items()):
+            if side.album_id != album_id:
+                continue
+            ref = self.refs_dir / f"{key}.wav"
+            if ref.exists() and hasattr(self.backend, "delete"):
+                self.backend.delete(str(ref))
+            ref.unlink(missing_ok=True)
+            del self.index.sides[key]
+        art = Path(album.art_path) if album.art_path else self.art_dir / f"{album_id}.jpg"
+        Path(art).unlink(missing_ok=True)
+        self.index.save()
+        log.info("deleted album %s (%s — %s)", album_id, album.artist, album.title)
+
     def sides_for(self, album_id: str) -> List[str]:
         """Distinct side labels present in an album's tracklist (e.g. A, B)."""
         album = self.index.albums.get(album_id)
@@ -287,6 +324,10 @@ class EnrollmentService:
         key = f"{_slug(album.title)}-side-{side.lower()}"
         self.refs_dir.mkdir(parents=True, exist_ok=True)
         ref_wav = self.refs_dir / f"{key}.wav"
+        # Re-recording a side: drop the previous fingerprint first so Olaf
+        # doesn't stack a second reference on the same key.
+        if ref_wav.exists() and hasattr(self.backend, "delete"):
+            self.backend.delete(str(ref_wav))
         sf.write(str(ref_wav), audio, sr)
         self.backend.store(str(ref_wav))
 
