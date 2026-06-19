@@ -1,31 +1,26 @@
 # Vinyl Display
 
 Recognize the record currently spinning on your turntable and show it on any
-screen. The Raspberry Pi listens and serves a web app; you open it on an iPad
-(or any browser) as the display: now playing, up next, album art, a progress
-bar, and time-synced lyrics that scroll as the song plays.
+screen: now playing, up next, album art, a progress bar, and time-synced lyrics
+that scroll as the song plays.
 
-It works entirely from the audio coming off your turntable, with no manual
-input. Recognition is self-hosted and offline (no accounts, no API keys, no
-per-play cost). It fingerprints against a database of your own records that you
-enroll once.
+An iPad (or any browser) listens through its microphone and shows the display.
+A small server does the fingerprint matching and serves the web app, so it can
+run anywhere on your network, including as a container. Recognition is
+self-hosted and offline once a record is enrolled (no accounts, no API keys, no
+per-play cost): it fingerprints against a database of your own records.
 
 The web app has two modes, switched with a toggle at the top:
 
 - Display: the full-screen now-playing and lyrics view (your iPad screen).
-- Collection: search and add records from the web, and record their sides.
+- Collection: search and add records, record their sides, and change settings.
 
 ```
-┌─────────────────── Raspberry Pi (listener + server) ───────────────┐
-│  USB line-in ─► rolling audio buffer                                │
-│         └─► recognition loop ─► Olaf ─► {track, offset_in_track}    │
-│                   ├─► MusicBrainz + Cover Art  → tracklist, art      │
-│                   ├─► LRCLIB                    → synced lyrics      │
-│                   └─► state ── websocket ──┐                         │
-└────────────────────────────────────────────┼───────────────────────┘
-                                              ▼  Wi-Fi (LAN)
-                                  iPad / browser → web app
-                                  (Display ⇄ Collection modes)
+iPad (Safari, https://vinyl.ossolab.net)            Server (container, any host)
+  mic ─► Web Audio ─► 10s WAV clip ──POST /api/recognize──► Olaf ─► {track, offset}
+                                                              ├─► MusicBrainz + Art
+                                                              ├─► LRCLIB (lyrics)
+  websocket ◄───────────────── now-playing state ◄──────────┘
 ```
 
 ## How it works
@@ -36,193 +31,149 @@ The web app has two modes, switched with a toggle at the top:
 | Tracklist / "up next" / album art | MusicBrainz + Cover Art Archive | none |
 | Time-synced lyrics | [LRCLIB](https://lrclib.net) | none |
 
-The recognizer returns where in the track you are. We seed a local clock with
-that offset and let the frontend advance it for smooth progress and lyric
-scrolling, re-syncing every 20 seconds or so to absorb turntable speed drift.
+The iPad captures about ten seconds of microphone audio, downsamples it, and
+posts it to the server, which runs an Olaf query and returns where in the track
+you are. The frontend seeds a local clock with that offset and advances it for
+smooth progress and lyric scrolling, re-syncing every several seconds to absorb
+turntable speed drift. Microphone processing (echo cancellation, noise
+suppression, auto-gain) is turned off so the music isn't mangled before
+fingerprinting.
 
-## Hardware
+Both recognition and enrollment use the same iPad microphone, so matching is
+self-consistent and robust.
 
-- Raspberry Pi 4 or 5 (the listener and server).
-- A screen, which is your iPad or any browser on the network. An HDMI screen on
-  the Pi is optional; the kiosk service can drive one too if you want.
-- A USB audio interface with line-in and pass-through, for example the Behringer
-  UCA202, so the record still plays to your speakers while the Pi listens.
-- A phono preamp, only if your turntable doesn't have one built in.
+## Requirements
 
-```
-Turntable ─► [phono preamp if needed] ─► UCA202 in
-                                          ├─ pass-through out ─► amp / speakers
-                                          └─ USB ─► Raspberry Pi
-```
+- A host to run the server. A Raspberry Pi 4/5 works; so does any machine that
+  runs Docker. It does not need to be near the turntable.
+- An iPad or phone near the turntable/speakers to listen and display.
+- HTTPS. iOS only grants microphone access over HTTPS (or localhost), so the
+  server must be reached over `https://`. This setup uses Traefik to terminate
+  TLS for `vinyl.ossolab.net`.
 
-## Quick start
+## Deploy (Docker + Dokploy + Traefik)
+
+The server is one container that bundles the Olaf binary, the API, and the built
+React app. TLS and routing are handled by Traefik.
 
 ```bash
 git clone <this repo> vinyl-display && cd vinyl-display
-./scripts/setup_pi.sh           # installs deps, builds Olaf, makes a venv
+# Deploy with Dokploy pointed at this repo, or directly:
+docker compose up -d --build
 ```
 
-Try it immediately without any hardware. The mock recognizer plays a fake record
-so you can see the whole UI:
+- `docker-compose.yml` carries the Traefik labels for `vinyl.ossolab.net` on
+  port 8080. Adjust the `certresolver` name and the external network to match
+  your Traefik/Dokploy setup.
+- State lives on the `vinyl-data` volume (Olaf DB, index, references, art cache,
+  lyrics cache, and the auth token), so it survives redeploys.
+- On first start the server logs a `?token=…` link. Open it once on the iPad to
+  unlock Collection mode (see Security).
+
+The first build is slow: it compiles Olaf with Zig and builds the React app.
+
+## Using it
+
+Open `https://vinyl.ossolab.net` on the iPad (add it to the Home Screen for a
+full-screen display). In Collection mode, tap **Start listening** and grant the
+microphone when asked. Continuous listening runs while the app is in the
+foreground with the screen awake.
+
+### Adding and enrolling records
+
+In Collection mode, search an album and **Add** it; its tracklist, synced
+lyrics, and cover art are fetched and cached on the server for offline use. Then
+play a side from the beginning and tap **Record side A**; the iPad streams the
+side to the server, which fingerprints it and works out each track's start time.
+A side shows a green check once enrolled. Recording a side this way needs no
+prior setup beyond microphone access.
+
+A room microphone has a higher noise floor than a line input, so the silent
+gaps between tracks may be harder to detect. The `audio.silence_rms` setting
+tunes this, and it falls back to MusicBrainz track lengths when gaps aren't
+found.
+
+### Settings, in the web app
+
+Collection mode has a **Settings** panel: audio device (for local line-in dev),
+MusicBrainz User-Agent, silence threshold, sync intervals, speed factor, lyrics
+on/off, min match score, and the olaf/mock backend. Most changes apply
+immediately; device and backend changes apply on the next restart. Saving
+rewrites the config file, so its comments are not preserved.
+
+### Start/stop listening
+
+The **Start/Stop listening** button pauses recognition so it isn't running
+non-stop. While paused the display shows "Paused" and the server does no
+matching.
+
+## Local development
+
+Run the backend and the Vite dev server separately. Microphone capture needs
+HTTPS, so for mic testing use the deployed HTTPS host; the rest of the UI works
+over localhost.
 
 ```bash
-./.venv/bin/python -m backend.main --simulate
-# open http://localhost:8080  — toggle between Display and Collection at the top
+./scripts/setup_pi.sh                       # system deps, Olaf, a venv
+./.venv/bin/python -m backend.main --simulate   # mock recognizer, no hardware
+# in another shell:
+cd frontend && npm install && npm run dev   # proxies /api, /ws, /art to :8080
 ```
 
-On your iPad, open `http://<pi-ip-address>:8080` (add it to the Home Screen for
-a full-screen, chrome-free display). Display mode is the screen; switch to
-Collection to add records. `?mode=add` or `/manage` opens straight into
-Collection.
-
-Find your real audio device, then put it in `config.yaml`:
-
-```bash
-./.venv/bin/python -m backend.main --list-devices
-```
-
-## Adding records: Collection mode
-
-Switch the web app to Collection mode (top toggle) from your iPad or any device
-on the network. There you can search an album, Add it (its tracklist, synced
-lyrics, and cover art are fetched from the internet and cached on the Pi for
-offline use), and see your whole collection. Adding an album needs no audio.
-
-Each side then needs its fingerprint recorded once, on the Pi, since that's
-where the turntable is. Start the record playing from the beginning of a side
-and tap Record side A. A banner appears, and when the side finishes you tap Stop
-and save. The Pi fingerprints the whole side as one reference and works out each
-track's start time. A side shows a green check once enrolled.
-
-Recording the reference from your own turntable is what makes matching robust to
-vinyl noise and pitch.
-
-### Or from the command line
-
-```bash
-./.venv/bin/python -m backend.enroll search "blood on the tracks dylan"  # find the MBID
-./.venv/bin/python -m backend.enroll album --release <RELEASE_MBID>      # cache metadata
-./.venv/bin/python -m backend.enroll record --out sideA.wav --minutes 25 # record a side
-./.venv/bin/python -m backend.enroll add sideA.wav --release <RELEASE_MBID> --side A
-```
-
-Each side is fingerprinted as one continuous reference. Track start-times come
-from the silent bands between songs, falling back to MusicBrainz track lengths
-if a record segues without gaps.
-
-## Running on boot
-
-```bash
-sudo cp systemd/vinyl-display.service /etc/systemd/system/
-sudo systemctl enable --now vinyl-display.service
-```
-
-`vinyl-display.service` runs the listener and web server, which is all you need
-when the iPad is the screen. If you also want an HDMI screen on the Pi itself,
-install the optional kiosk too:
-
-```bash
-sudo cp systemd/vinyl-kiosk.service /etc/systemd/system/
-sudo systemctl enable --now vinyl-kiosk.service   # opens /?mode=display fullscreen
-```
-
-Both assume the repo at `/home/pi/vinyl-display` and user `pi`, so edit the
-units if yours differ.
-
-## Configuration
-
-See `config.example.yaml` (copied to `config.yaml` by the setup script). Key
-knobs:
-
-- `audio.device`: your USB interface (name or index from `--list-devices`).
-- `audio.silence_rms`: threshold for needle-up and gap detection.
-- `recognition.interval_seconds`: slow re-sync cadence for drift.
-- `recognition.fast_interval_seconds`: fast cadence used to lock on at track changes.
-- `playback.speed_factor`: turntable speed correction (for example `33.4/33.33`).
-
-### From the web app
-
-You don't have to edit the file by hand. Open Collection mode and tap
-**Settings** to change the common options from any device: audio device (picked
-from a detected list), MusicBrainz User-Agent, silence threshold, sync
-intervals, speed factor, lyrics on/off, min match score, and the olaf/mock
-backend. Most changes apply to the running app immediately; changing the audio
-device or backend is saved and takes effect on the next restart. The settings
-panel is part of the gated companion API, so it needs the same token as the rest
-of Collection mode. Saving rewrites `config.yaml`, so the comments in that file
-are not preserved once you save from the web app.
+`backend/main.py` also supports the original Raspberry Pi line-in path (a USB
+audio interface feeding the Pi) for local use; the container path uses the iPad
+microphone instead.
 
 ## Security
 
-The companion API can start audio capture from your turntable, so it's treated
-as a control surface, not just a viewer:
+The API can start audio capture and change settings, so it is treated as a
+control surface:
 
 - Token auth on `/api`. Every management or control call requires a token
   (`X-Auth-Token` header or `?token=`). On first run a random token is generated,
-  saved to `auth_token.txt` next to the database (mode `600`), and logged as a
-  `/manage?token=…` link. Open that once on your phone; the token is stored in
-  the browser and stripped from the URL. Set a fixed `server.auth_token` in the
-  config to pin it. Comparisons use `hmac.compare_digest` (constant-time).
+  saved next to the database (mode `600`), and logged as a `?token=…` link. Open
+  it once on the iPad; the token is stored in the browser and stripped from the
+  URL. Comparisons use `hmac.compare_digest`.
 - The display stays open. `/`, `/ws`, and `/art` are read-only and need no
-  token, so the kiosk and the phone's now-playing bar work without one. Only the
-  collection and recording API is gated.
+  token. Only the collection, recording, recognition, and settings API is gated.
 - Input validation. Release IDs are validated as MusicBrainz UUIDs before they
-  ever touch a file path or index key (this prevents path traversal); API bodies
-  are checked and fail closed with `400`. The app fetches only MusicBrainz,
-  LRCLIB, and Cover Art URLs it constructs itself, with no user-supplied URLs
-  (no SSRF surface).
-- Least-privilege service. `systemd/vinyl-display.service` runs as a normal user
-  with `NoNewPrivileges`, `ProtectSystem=strict`, read-only home, an explicit
-  `ReadWritePaths` allow-list, and `PrivateTmp`.
-- Network exposure. It binds `0.0.0.0` so your phone can reach it. Set
-  `server.host: 127.0.0.1` to keep it Pi-only, or add a firewall rule limiting
-  tcp/8080 to your LAN (`ufw allow from 192.168.0.0/16 to any port 8080`). Don't
-  port-forward it to the public internet.
+  touch a file path or index key; API bodies fail closed with `400`. The app
+  fetches only MusicBrainz, LRCLIB, and Cover Art URLs it builds itself.
+- TLS is terminated by Traefik; the container speaks plain HTTP internally and
+  publishes no ports of its own.
 
 ## Project layout
 
 ```
 backend/
-  main.py            entry point (server + recognition loop on one event loop)
+  asgi.py            container entrypoint: builds a pure server from DATA_DIR
+  main.py            local-dev entry (line-in / --simulate, runs the loop)
   config.py          YAML config -> typed dataclasses
-  audio/
-    capture.py       rolling ring buffer, RMS level, full-side recording
-    split.py         track-boundary detection by silent bands
+  settings.py        web-editable settings: validate, persist, apply live
+  audio/             rolling buffer + silence splitting (line-in dev only)
   recognition/
-    recognizer.py    the loop: silence -> recognize -> publish or resync (offline)
+    recognizer.py    apply_match()/publish_resolved(): resolve + publish state
     olaf.py          shells out to the Olaf CLI
-    mock.py          fake record (with cached lyrics) for --simulate
-    models.py        albums + sides index; resolve(side, offset) -> track+position
-  metadata/
-    musicbrainz.py   release search, tracklist + cover art (cached, rate-limited)
-    lyrics.py        LRCLIB synced-lyrics fetch + LRC parsing
-  enrollment.py      shared service: search/add albums, record + fingerprint sides
-  enroll.py          CLI wrapper around the enrollment service
+    mock.py          fake record for --simulate
+    models.py        albums + sides index; resolve(side, offset) -> track
+  metadata/          MusicBrainz + LRCLIB clients (cached)
+  enrollment.py      add albums; client-fed mic enrollment + fingerprinting
   state.py           now-playing state + websocket fan-out
-  server.py          kiosk page, /ws, /art, and the companion /api + /manage
-frontend/
-  index.html         single-page app: Display + Collection modes
-  app.js             mode switch, shared websocket, lyrics sync, collection mgmt
-  styles.css         display + collection styling (iPad-friendly, landscape/portrait)
-systemd/             backend service (+ optional HDMI kiosk)
+  server.py          API, websocket, /art, and serving the built SPA
+frontend/            React + Vite + Tailwind app
+  src/hooks/useMic.js   shared mic engine: recognition + enrollment capture
+  src/components/       Display, Collection (vinyl grid), Settings, mode bar
+Dockerfile           Olaf (Zig) + React build + slim Python runtime
+docker-compose.yml   Traefik labels for vinyl.ossolab.net
 ```
-
-## How recognition works
-
-Each side is one fingerprint reference. A single recognition returns the side
-plus your offset within it, and the index maps that offset to which track and
-how far into it you are. This avoids per-track splitting at runtime, and the
-position drives the progress bar and synced-lyrics scroll. The loop locks on
-fast at track changes, then relaxes to a slow cadence that only corrects drift.
-Lyrics and art are read from the local cache, so the runtime needs no internet
-at all.
 
 ## Notes and limitations
 
-- Offline-first: if MusicBrainz or LRCLIB are unreachable, it falls back to a
-  tracklist built from your local index and simply omits lyrics and art.
-- Olaf output parsing: Olaf's CLI columns have shifted between versions. If
-  recognition matches but shows the wrong track or offset, adjust the `COL_*`
-  constants in `backend/recognition/olaf.py` (documented there).
-- Lyric timing is anchored to the official release; the periodic re-sync and
-  `speed_factor` keep drift to a sub-second wobble.
+- iOS needs HTTPS and a user tap to start the microphone; continuous listening
+  only runs while the app is foregrounded with the screen awake.
+- Offline-first runtime: lyrics and art are cached at enrollment, so matching
+  needs no internet. If MusicBrainz or LRCLIB are unreachable while adding an
+  album, it falls back to a local tracklist and omits lyrics/art.
+- Olaf's CLI columns have shifted between versions. If recognition matches but
+  shows the wrong track or offset, adjust the `COL_*` constants in
+  `backend/recognition/olaf.py`.
