@@ -1,3 +1,5 @@
+import { BUILD } from "../build.js";
+
 // Prominent, unambiguous microphone state: off / listening / identifying /
 // recognized, with a live input-level meter so you can see the mic is hearing
 // the music.
@@ -55,6 +57,10 @@ export default function MicStatus({ mic, state }) {
             ))}
           </div>
         )}
+        <div className="mt-2 font-mono text-[10px] text-muted/70">
+          {BUILD} · lvl {(mic.level || 0).toFixed(2)} · {mic.debug ? mic.debug.sent : 0} sent ·{" "}
+          {mic.debug ? mic.debug.last : "-"}
+        </div>
       </div>
       <button
         onClick={mic.toggleListening}
