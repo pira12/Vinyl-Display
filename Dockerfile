@@ -34,7 +34,7 @@ RUN npm run build
 # Olaf binary built above.
 FROM python:3.12-slim-trixie
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ffmpeg libsndfile1 && rm -rf /var/lib/apt/lists/*
+      ffmpeg libsndfile1 libchromaprint-tools && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 RUN pip install --no-cache-dir \
       "fastapi>=0.110" "uvicorn[standard]>=0.29" "httpx>=0.27" \

@@ -116,10 +116,12 @@ async def run(cfg, cfg_path: str = "config.yaml") -> None:
     settings = SettingsManager(
         cfg, cfg_path, state=state, backend=backend, mb=mb, lyrics=lyrics
     )
+    from .metadata.acoustid import AcoustIDClient
+    acoustid = AcoustIDClient(cfg.metadata.acoustid_api_key)
 
     token = _resolve_token(cfg, db_dir)
     app = create_app(state, index, enrollment, art_dir=str(art_dir),
-                     auth_token=token, settings=settings)
+                     auth_token=token, settings=settings, acoustid=acoustid)
     server = uvicorn.Server(
         uvicorn.Config(app, host=cfg.server.host, port=cfg.server.port, log_level="info")
     )
