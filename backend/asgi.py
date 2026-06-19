@@ -92,9 +92,10 @@ def build_app_from_env():
     acoustid = AcoustIDClient(cfg.metadata.acoustid_api_key)
     token = _resolve_token(cfg, db_dir)
 
+    from .version import VERSION
     tmp_dir = "/dev/shm" if Path("/dev/shm").exists() else None
-    log.info("Vinyl Display server ready (data=%s, auto-label=%s)",
-             data_dir, "on" if acoustid.available else "off")
+    log.info("Vinyl Display server ready (version=%s, data=%s, auto-label=%s)",
+             VERSION, data_dir, "on" if acoustid.available else "off")
     if token:
         log.info("Companion token: append ?token=%s once on your device.", token)
     return create_app(state, index, enrollment, art_dir=str(art_dir),
