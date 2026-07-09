@@ -86,6 +86,22 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Gentle entrance for the now-playing art + titles when the track changes
+   (keyed by track, so re-syncs of the same track don't re-trigger it). */
+.track-in {
+  animation: track-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes track-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* Listening equalizer: bars are driven purely by the real input level, so they
    stay flat in silence and rise only when the mic actually hears sound. */
 .eq-bar {

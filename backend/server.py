@@ -8,6 +8,7 @@ import hmac
 import logging
 import os
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -123,6 +124,47 @@ def create_app(state: StateManager, index: TrackIndex,
             return JSONResponse({"error": str(exc)}, status_code=400)
         return JSONResponse({"album": album,
                              "sides": enrollment.sides_for(album["id"])})
+
+    @app.post("/api/collection/add-current")
+    async def api_add_current() -> JSONResponse:
+        """One tap from the display: save the now-playing album.
+
+        Only meaningful when the shazam backend matched a track outside the
+        collection. Resolves the Shazam metadata to a MusicBrainz album, adds
+        it, then upgrades the display in place without losing the play clock.
+        """
+        track, album_meta = state.track, state.album or {}
+        if state.status != "playing" or not track:
+            return JSONResponse({"error": "nothing is playing"}, status_code=400)
+        if album_meta.get("in_collection") is not False:
+            return JSONResponse({"error": "already in your collection"},
+                                status_code=400)
+        artist = track.get("artist") or ""
+        query = " ".join(filter(None, [
+            album_meta.get("title") or track.get("title"), artist,
+        ]))
+        rows = await enrollment.search(query)
+        if not rows:
+            return JSONResponse({"error": "couldn't find that album on "
+                                          "MusicBrainz"}, status_code=404)
+        try:
+            album = await enrollment.add_album(
+                rows[0].get("release_mbid"),
+                release_group_mbid=rows[0].get("release_group_mbid"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+        hit = index.find_track(artist, track.get("title") or "")
+        if hit is not None:
+            album_obj, idx = hit
+            elapsed = max(0, int(time.time() * 1000) - state.updated_at)
+            publish_album_track(
+                state, album_obj, idx,
+                state.position_ms + int(elapsed * state.speed_factor),
+            )
+            state.current_ident = ("album", album_obj.id, idx)
+        return JSONResponse({"album": album})
 
     @app.patch("/api/albums/{album_id}")
     async def api_edit_album(album_id: str, request: Request) -> JSONResponse:

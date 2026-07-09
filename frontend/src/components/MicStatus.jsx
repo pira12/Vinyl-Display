@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { BUILD } from "../build.js";
 
 // Prominent, unambiguous microphone state: off / listening / identifying /
 // recognized, with a live input-level meter so you can see the mic is hearing
-// the music.
+// the music. Tapping the card reveals a small diagnostics line.
 export default function MicStatus({ mic, state }) {
+  const [showDebug, setShowDebug] = useState(false);
   const playing = state && state.status === "playing" && state.track;
   let phase, label, sub, dot;
   if (!mic.micActive) {
@@ -36,7 +38,10 @@ export default function MicStatus({ mic, state }) {
         )}
         <span className={`relative inline-flex h-3 w-3 rounded-full ${dot}`} />
       </span>
-      <div className="min-w-0 flex-1">
+      <div
+        className="min-w-0 flex-1 cursor-pointer"
+        onClick={() => setShowDebug((s) => !s)}
+      >
         <div className="text-sm font-semibold">{label}</div>
         <div className="truncate text-xs text-muted">{sub}</div>
         {mic.micActive && !playing && (
@@ -50,10 +55,12 @@ export default function MicStatus({ mic, state }) {
             })}
           </div>
         )}
-        <div className="mt-2 font-mono text-[10px] text-muted/70">
-          {BUILD} · lvl {(mic.level || 0).toFixed(2)} · {mic.debug ? mic.debug.sent : 0} sent ·{" "}
-          {mic.debug ? mic.debug.last : "-"}
-        </div>
+        {showDebug && (
+          <div className="mt-2 font-mono text-[10px] text-muted/70">
+            {BUILD} · lvl {(mic.level || 0).toFixed(2)} · {mic.debug ? mic.debug.sent : 0} sent ·{" "}
+            {mic.debug ? mic.debug.last : "-"}
+          </div>
+        )}
       </div>
       <button
         onClick={mic.toggleListening}
