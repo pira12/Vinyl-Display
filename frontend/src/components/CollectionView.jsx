@@ -79,13 +79,21 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
     setSearching(false);
   }
 
-  async function addAlbum(mbid) {
-    setAddingId(mbid);
-    const res = await guard(() => api.postJson("/api/albums", { release_mbid: mbid }));
+  async function addAlbum(row) {
+    const key = row.release_group_mbid || row.release_mbid;
+    setAddingId(key);
+    // Adding by release-group lets the server pick the best pressing
+    // (official, vinyl where possible); old rows fall back to the release id.
+    const body = row.release_group_mbid
+      ? { release_group_mbid: row.release_group_mbid }
+      : { release_mbid: row.release_mbid };
+    const res = await guard(() => api.postJson("/api/albums", body));
     setAddingId("");
     if (res && res.album) {
       toast("Added " + res.album.title);
-      setResults((r) => (r ? r.filter((x) => x.release_mbid !== mbid) : r));
+      setResults((r) =>
+        r ? r.filter((x) => (x.release_group_mbid || x.release_mbid) !== key) : r
+      );
       // Show it immediately, then reconcile with the server.
       setAlbums((prev) =>
         prev.some((a) => a.id === res.album.id) ? prev : [...prev, res.album]
@@ -195,9 +203,10 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
       {showSettings && <SettingsPanel onToast={toast} />}
 
       {!canRecord && (
-        <div className="mb-4 rounded-xl border border-[var(--accent)] bg-[#2a1f10] p-3 text-sm">
-          Recording is unavailable (the server has no Olaf backend). You can still
-          search and add albums.
+        <div className="mb-4 rounded-xl border border-[#2a2a33] bg-panel p-3 text-sm text-muted">
+          Records are recognized automatically — nothing to set up. Add your
+          records below so the display can show their tracklist, up next, and
+          synced lyrics.
         </div>
       )}
 
@@ -224,9 +233,16 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
         <div className="mt-3 space-y-2">
           {results.length === 0 && <p className="text-muted">No matches.</p>}
           {results.map((r) => {
-            const owned = albums.some((a) => a.id === r.release_mbid);
+            const key = r.release_group_mbid || r.release_mbid;
+            const owned = albums.some(
+              (a) =>
+                a.id === r.release_mbid ||
+                (r.release_group_mbid &&
+                  a.release_group_mbid === r.release_group_mbid)
+            );
+            const adding = addingId === key;
             return (
-              <div key={r.release_mbid} className="flex items-center gap-3 rounded-xl bg-panel p-3">
+              <div key={key} className="flex items-center gap-3 rounded-xl bg-panel p-3">
                 <img
                   src={r.art_url || undefined}
                   alt=""
@@ -241,13 +257,13 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
                   </div>
                 </div>
                 <button
-                  onClick={() => addAlbum(r.release_mbid)}
-                  disabled={addingId === r.release_mbid || owned}
+                  onClick={() => addAlbum(r)}
+                  disabled={adding || owned}
                   className="flex items-center gap-2 rounded-lg px-4 py-2 font-semibold text-[#181400] disabled:opacity-60"
                   style={{ background: owned ? "#2f5128" : "var(--accent)" }}
                 >
-                  {addingId === r.release_mbid && <span className="spinner h-4 w-4" />}
-                  {owned ? "Added ✓" : addingId === r.release_mbid ? "Adding…" : "Add"}
+                  {adding && <span className="spinner h-4 w-4" />}
+                  {owned ? "Added ✓" : adding ? "Adding…" : "Add"}
                 </button>
               </div>
             );
@@ -275,7 +291,7 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
               <option value="recent">Recently added</option>
               <option value="artist">Artist A–Z</option>
               <option value="title">Title A–Z</option>
-              <option value="enrolled">Enrolled first</option>
+              {canRecord && <option value="enrolled">Enrolled first</option>}
             </select>
           </div>
         )}

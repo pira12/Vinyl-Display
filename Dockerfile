@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 RUN pip install --no-cache-dir \
       "fastapi>=0.110" "uvicorn[standard]>=0.29" "httpx>=0.27" \
-      "PyYAML>=6.0" "numpy>=1.26,<2" "soundfile>=0.12"
+      "PyYAML>=6.0" "numpy>=1.26,<2" "soundfile>=0.12" "shazamio>=0.8"
 COPY --from=olaf /usr/local/bin/olaf /usr/local/bin/olaf
 COPY backend/ ./backend/
 COPY --from=web /web/dist ./frontend/dist

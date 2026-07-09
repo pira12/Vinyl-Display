@@ -34,13 +34,15 @@ export default function AlbumCard({ album, canRecord, busySide, onRecord, onOpen
             {album.year ? ` · ${album.year}` : ""} · {album.track_count} tracks
           </div>
         </button>
+        {/* Side-recording only exists on the olaf backend; with automatic
+            (shazam) recognition there is nothing to learn. */}
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {sides.map((side) => {
+          {canRecord && sides.map((side) => {
             const done = (album.enrolled_sides || []).includes(side);
             return (
               <button
                 key={side}
-                disabled={!canRecord || !!busySide}
+                disabled={!!busySide}
                 onClick={() => onRecord(album.id, side)}
                 className={
                   "inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium disabled:opacity-40 " +

@@ -81,8 +81,8 @@ def _validate_one(key: str, value: Any, devices: Optional[List[dict]]) -> Any:
         return n
 
     if key == "recognition.backend":
-        if value not in ("olaf", "mock"):
-            raise ValueError("must be 'olaf' or 'mock'")
+        if value not in ("shazam", "olaf", "mock"):
+            raise ValueError("must be 'shazam', 'olaf' or 'mock'")
         return value
 
     if key in ("recognition.interval_seconds", "recognition.fast_interval_seconds"):

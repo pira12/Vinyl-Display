@@ -135,12 +135,14 @@ def apply_match(state: StateManager, index: TrackIndex,
 
 class RecognitionService:
     def __init__(self, config, state: StateManager, index: TrackIndex,
-                 backend, capture=None, tmp_dir: Optional[str] = None) -> None:
+                 backend, capture=None, tmp_dir: Optional[str] = None,
+                 lyrics=None) -> None:
         self.cfg = config
         self.state = state
         self.index = index
         self.backend = backend
         self.capture = capture
+        self.lyrics = lyrics
         self.is_mock = config.recognition.backend == "mock"
         self._query_wav = Path(tmp_dir or ".") / "vinyl-query.wav"
 
@@ -171,6 +173,20 @@ class RecognitionService:
                 self.state.set_status("idle")
                 self.state.current_ident = None
                 return False
+
+        # Shazam-style backends identify the clip online and resolve against
+        # the collection themselves (no side references involved).
+        if hasattr(self.backend, "recognize"):
+            if self.capture is None:
+                return False
+            from .shazam import apply_shazam  # local import avoids a cycle
+
+            await asyncio.to_thread(self._dump_query_wav)
+            result = await self.backend.recognize(str(self._query_wav))
+            return await apply_shazam(
+                self.state, self.index, result, self.cfg.audio.query_seconds,
+                lyrics=self.lyrics, lyrics_enabled=self.cfg.lyrics.enabled,
+            )
 
         match = await self._recognize()
         return apply_match(self.state, self.index, match) is not None

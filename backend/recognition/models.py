@@ -15,10 +15,13 @@ fully offline (lyrics + art are already on disk).
 
 from __future__ import annotations
 
+import difflib
 import json
+import re
+import unicodedata
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -48,6 +51,7 @@ class Album:
     artist: str = ""
     year: str = ""
     release_mbid: Optional[str] = None
+    release_group_mbid: Optional[str] = None  # groups all pressings of an album
     art_path: Optional[str] = None        # local cached image file
     tracklist: List[AlbumTrack] = field(default_factory=list)
 
@@ -75,6 +79,48 @@ class Resolved:
     index: int                            # current track's index in the album
     position_ms: int                      # position within the current track
     next_track: Optional[AlbumTrack]
+
+
+# -- fuzzy text matching (Shazam result -> collection track) -------------------
+# Shazam and MusicBrainz label the same song differently ("Money - 2011
+# Remastered Version" vs "Money", "&" vs "and", feat. credits, diacritics), so
+# matching is done on aggressively normalized strings.
+_PAREN = re.compile(r"[\(\[][^)\]]*[\)\]]")
+_DASH_SUFFIX = re.compile(r"\s+-\s+.*$")
+_FEAT = re.compile(r"\b(?:feat|ft|featuring)\b.*$")
+_NONWORD = re.compile(r"[^a-z0-9]+")
+
+
+def norm_text(s: Optional[str]) -> str:
+    s = unicodedata.normalize("NFKD", s or "")
+    s = "".join(c for c in s if not unicodedata.combining(c)).lower()
+    s = s.replace("&", " and ")
+    s = _PAREN.sub(" ", s)
+    s = _DASH_SUFFIX.sub(" ", s)
+    s = _FEAT.sub(" ", s)
+    return _NONWORD.sub(" ", s).strip()
+
+
+def _title_score(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    if a in b or b in a:
+        return 0.95
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _artist_matches(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    if a in b or b in a:
+        return True
+    ta, tb = set(a.split()), set(b.split())
+    if ta <= tb or tb <= ta:
+        return True
+    union = ta | tb
+    return bool(union) and len(ta & tb) / len(union) >= 0.5
 
 
 class TrackIndex:
@@ -141,3 +187,32 @@ class TrackIndex:
             position_ms=max(0, offset_ms - current.start_ms),
             next_track=next_track,
         )
+
+    def find_track(self, artist: str, title: str) -> Optional[Tuple[Album, int]]:
+        """Find the collection track best matching an (artist, title) pair.
+
+        Same song titles recur across artists ("One", "Home"), so a matching
+        artist is effectively required — except on various-artists records,
+        where the album artist says nothing about the track and a near-exact
+        title has to carry the match alone.
+        """
+        q_title, q_artist = norm_text(title), norm_text(artist)
+        if not q_title:
+            return None
+
+        best: Optional[Tuple[Album, int]] = None
+        best_score = 0.0
+        for album in self.albums.values():
+            album_artist = norm_text(album.artist)
+            if _artist_matches(q_artist, album_artist):
+                penalty = 0.0
+            elif album_artist in ("various artists", "various", ""):
+                penalty = 0.05
+            else:
+                continue
+            for idx, t in enumerate(album.tracklist):
+                score = _title_score(q_title, norm_text(t.title)) - penalty
+                if score > best_score:
+                    best, best_score = (album, idx), score
+
+        return best if best_score >= 0.87 else None

@@ -59,9 +59,19 @@ class EnrollmentService:
 
     # -- metadata (phone-friendly) ------------------------------------------
     async def search(self, query: str) -> List[Dict[str, Any]]:
-        return await self.mb.search_releases(query)
+        return await self.mb.search_albums(query)
 
-    async def add_album(self, release_mbid: str) -> Dict[str, Any]:
+    async def add_album(self, release_mbid: Optional[str] = None,
+                        release_group_mbid: Optional[str] = None) -> Dict[str, Any]:
+        # Adding by release-group ("the album") lets the server pick the best
+        # pressing — Official and on vinyl where possible, so track positions
+        # come out as A1/B2. A concrete release MBID is still accepted.
+        if release_group_mbid:
+            if not _MBID_RE.match(release_group_mbid):
+                raise ValueError("invalid release-group MBID")
+            release_mbid = await self.mb.best_release_for_group(release_group_mbid)
+            if not release_mbid:
+                raise ValueError("no releases found for that album")
         if not _MBID_RE.match(release_mbid or ""):
             raise ValueError("invalid release MBID")
         release = await self.mb.get_release(release_mbid)
@@ -80,16 +90,21 @@ class EnrollmentService:
             dur = (t.get("length_ms") or 0) / 1000.0 or None
             async with sem:
                 try:
-                    return await self.lyrics.get(
+                    lyr = await self.lyrics.get(
                         release["artist"], t["title"], release["title"], dur
                     )
+                    lyr.pop("duration_ms", None)  # track lengths come from MB
+                    return lyr
                 except Exception:  # noqa: BLE001 - a missing lyric is not fatal
                     return empty
 
         tracks = release["tracklist"]
+        art_urls = release.get("art_urls") or (
+            [release["art_url"]] if release.get("art_url") else []
+        )
         lyric_results, art_path = await asyncio.gather(
             asyncio.gather(*(fetch_lyrics(t) for t in tracks)),
-            self._download_art(release_mbid, release.get("art_url")),
+            self._download_art(release_mbid, art_urls),
         )
 
         tracklist: List[AlbumTrack] = [
@@ -109,6 +124,7 @@ class EnrollmentService:
             artist=release["artist"],
             year=release.get("year", ""),
             release_mbid=release_mbid,
+            release_group_mbid=release.get("release_group_mbid") or release_group_mbid,
             art_path=art_path,
             tracklist=tracklist,
         )
@@ -117,20 +133,24 @@ class EnrollmentService:
         log.info("added album: %s — %s", album.artist, album.title)
         return self.album_summary(album)
 
-    async def _download_art(self, album_id: str, url: Optional[str]) -> Optional[str]:
-        if not url:
-            return None
+    async def _download_art(self, album_id: str,
+                            urls: List[str]) -> Optional[str]:
+        """Fetch cover art, trying each candidate URL in order (a specific
+        pressing may have no scan while its release-group does)."""
         dest = self.art_dir / f"{album_id}.jpg"
-        try:
-            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                self.art_dir.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(resp.content)
-                return str(dest)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("art download failed for %s: %s", album_id, exc)
-            return None
+        for url in urls:
+            try:
+                async with httpx.AsyncClient(timeout=20,
+                                             follow_redirects=True) as client:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    self.art_dir.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(resp.content)
+                    return str(dest)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("art download failed for %s (%s): %s",
+                            album_id, url, exc)
+        return None
 
     # -- collection view -----------------------------------------------------
     def album_summary(self, album: Album) -> Dict[str, Any]:
@@ -142,6 +162,7 @@ class EnrollmentService:
             "title": album.title,
             "artist": album.artist,
             "year": album.year,
+            "release_group_mbid": album.release_group_mbid,
             "art_url": f"/art/{Path(album.art_path).name}" if album.art_path else None,
             "track_count": len(album.tracklist),
             "tracklist": [
