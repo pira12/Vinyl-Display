@@ -63,15 +63,21 @@ class LyricsClient:
         if not data:
             return {"synced": False, "lines": []}
 
+        # LRCLIB knows the track length; pass it along for callers that have
+        # no other duration source (e.g. a Shazam match outside the collection).
+        extra = {}
+        if isinstance(data.get("duration"), (int, float)) and data["duration"] > 0:
+            extra["duration_ms"] = int(data["duration"] * 1000)
+
         if data.get("syncedLyrics"):
-            return {"synced": True, "lines": parse_lrc(data["syncedLyrics"])}
+            return {"synced": True, "lines": parse_lrc(data["syncedLyrics"]), **extra}
         if data.get("plainLyrics"):
             lines = [
                 {"t": None, "text": line}
                 for line in data["plainLyrics"].splitlines()
             ]
-            return {"synced": False, "lines": lines}
-        return {"synced": False, "lines": []}
+            return {"synced": False, "lines": lines, **extra}
+        return {"synced": False, "lines": [], **extra}
 
     async def _request(self, path: str, params: Dict[str, Any]) -> Optional[dict]:
         headers = {"User-Agent": self.user_agent}

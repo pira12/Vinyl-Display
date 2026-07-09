@@ -9,42 +9,63 @@ from backend.metadata.musicbrainz import MusicBrainzClient
 from backend.recognition.models import TrackIndex
 
 
-# -- search dedup --------------------------------------------------------------
-def _mb(tmp_path, releases):
+# -- album search (release-group based) -----------------------------------------
+def _mb(tmp_path, payload):
     mb = MusicBrainzClient("UA", str(tmp_path / "cache"))
 
     async def fake_get(url, params):
-        return {"releases": releases}
+        return payload
 
     mb._get = fake_get  # type: ignore[assignment]
     return mb
 
 
-def test_search_collapses_release_groups(tmp_path):
-    mb = _mb(tmp_path, [
-        {"id": "r1", "title": "Album", "status": "Bootleg", "date": "2001",
-         "release-group": {"id": "rg1"}, "artist-credit": [{"name": "A"}],
-         "track-count": 10},
-        {"id": "r2", "title": "Album", "status": "Official", "date": "2000",
-         "cover-art-archive": {"front": True}, "track-count": 10,
-         "release-group": {"id": "rg1"}, "artist-credit": [{"name": "A"}]},
-        {"id": "r3", "title": "Other", "status": "Official",
-         "release-group": {"id": "rg2"}, "artist-credit": [{"name": "B"}]},
-    ])
-    rows = asyncio.run(mb.search_releases("album"))
-    assert len(rows) == 2                       # rg1's two editions collapse to one
-    assert rows[0]["release_mbid"] == "r2"      # prefers Official + cover art
+def test_search_albums_ranks_studio_albums_over_variants(tmp_path):
+    mb = _mb(tmp_path, {"release-groups": [
+        {"id": "rg-live", "title": "Album (Live)", "score": 100,
+         "primary-type": "Album", "secondary-types": ["Live"],
+         "artist-credit": [{"name": "A"}], "releases": [{"id": "r-live"}],
+         "first-release-date": "2002-01-01"},
+        {"id": "rg-studio", "title": "Album", "score": 100,
+         "primary-type": "Album", "artist-credit": [{"name": "A"}],
+         "releases": [{"id": "r-studio"}], "first-release-date": "2000-05-01"},
+    ]})
+    rows = asyncio.run(mb.search_albums("album"))
+    assert rows[0]["release_group_mbid"] == "rg-studio"   # live variant demoted
+    assert rows[0]["year"] == "2000"
     assert rows[0]["artist"] == "A"
-    assert rows[1]["release_mbid"] == "r3"      # distinct group preserved, in order
+    assert rows[0]["release_mbid"] == "r-studio"          # addable fallback id
 
 
-def test_search_falls_back_to_release_id_without_group(tmp_path):
-    mb = _mb(tmp_path, [
-        {"id": "r1", "title": "X", "artist-credit": [{"name": "A"}]},
-        {"id": "r2", "title": "Y", "artist-credit": [{"name": "A"}]},
-    ])
-    rows = asyncio.run(mb.search_releases("x"))
-    assert {r["release_mbid"] for r in rows} == {"r1", "r2"}
+def test_search_albums_skips_groups_without_releases(tmp_path):
+    mb = _mb(tmp_path, {"release-groups": [
+        {"id": "rg1", "title": "Ghost", "score": 100, "primary-type": "Album",
+         "artist-credit": [{"name": "A"}], "releases": []},
+        {"id": "rg2", "title": "Real", "score": 90, "primary-type": "Album",
+         "artist-credit": [{"name": "A"}], "releases": [{"id": "r1"}]},
+    ]})
+    rows = asyncio.run(mb.search_albums("x"))
+    assert [r["release_group_mbid"] for r in rows] == ["rg2"]
+
+
+def test_best_release_prefers_official_vinyl_earliest(tmp_path):
+    mb = _mb(tmp_path, {"releases": [
+        {"id": "cd-late", "status": "Official", "date": "1994",
+         "media": [{"format": "CD"}]},
+        {"id": "vinyl-orig", "status": "Official", "date": "1973-03-01",
+         "media": [{"format": "12\" Vinyl"}]},
+        {"id": "vinyl-reissue", "status": "Official", "date": "2016",
+         "media": [{"format": "Vinyl"}]},
+        {"id": "bootleg", "status": "Bootleg", "date": "1972",
+         "media": [{"format": "Vinyl"}]},
+    ]})
+    assert asyncio.run(mb.best_release_for_group("rg")) == "vinyl-orig"
+
+
+def test_lucene_metacharacters_are_escaped():
+    from backend.metadata.musicbrainz import _escape_lucene
+    assert _escape_lucene("AC/DC") == "AC\\/DC"
+    assert _escape_lucene('what "is" this?') == 'what \\"is\\" this\\?'
 
 
 # -- enrollment service helpers ------------------------------------------------
@@ -80,6 +101,40 @@ def _seed_album(index, art_dir, album_id="al1"):
     ))
     index.save()
     return art
+
+
+# -- add by release-group (best pressing) ---------------------------------------
+def test_add_album_by_release_group_resolves_best_pressing(tmp_path):
+    _, index, enr = _enrollment(tmp_path)
+    rg = "12345678-1234-1234-1234-123456789012"
+    rel = "87654321-4321-4321-4321-210987654321"
+
+    async def fake_best(rg_mbid):
+        assert rg_mbid == rg
+        return rel
+
+    async def fake_get_release(mbid):
+        assert mbid == rel
+        return {"release_mbid": rel, "release_group_mbid": rg,
+                "title": "T", "artist": "A", "year": "1999",
+                "art_urls": [], "tracklist": [
+                    {"position": "A1", "number": 1, "title": "One",
+                     "length_ms": 1000, "recording_mbid": None}]}
+
+    enr.mb.best_release_for_group = fake_best
+    enr.mb.get_release = fake_get_release
+    enr.cfg.lyrics.enabled = False
+    summary = asyncio.run(enr.add_album(release_group_mbid=rg))
+    assert summary["id"] == rel
+    assert summary["release_group_mbid"] == rg
+    assert index.albums[rel].release_group_mbid == rg
+
+
+def test_add_album_rejects_bad_release_group_id(tmp_path):
+    import pytest
+    _, _, enr = _enrollment(tmp_path)
+    with pytest.raises(ValueError):
+        asyncio.run(enr.add_album(release_group_mbid="../../etc/passwd"))
 
 
 # -- delete album --------------------------------------------------------------

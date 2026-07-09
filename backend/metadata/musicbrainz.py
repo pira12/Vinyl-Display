@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -22,6 +23,14 @@ log = logging.getLogger(__name__)
 
 MB_BASE = "https://musicbrainz.org/ws/2"
 CAA_BASE = "https://coverartarchive.org"
+
+# Lucene metacharacters break MusicBrainz's query parser when a user types
+# them ("AC/DC", "What's Going On?"). Escape them so free text stays free text.
+_LUCENE_SPECIAL = re.compile(r'(&&|\|\||[+\-!(){}\[\]^"~*?:\\/])')
+
+
+def _escape_lucene(query: str) -> str:
+    return _LUCENE_SPECIAL.sub(r"\\\1", query)
 
 
 class MusicBrainzClient:
@@ -63,7 +72,7 @@ class MusicBrainzClient:
 
         data = await self._get(
             f"{MB_BASE}/release/{release_mbid}",
-            {"inc": "recordings+artist-credits", "fmt": "json"},
+            {"inc": "recordings+artist-credits+release-groups", "fmt": "json"},
         )
         if not data:
             return None
@@ -89,12 +98,21 @@ class MusicBrainzClient:
                     }
                 )
 
+        rg_mbid = (data.get("release-group") or {}).get("id")
+        # Not every pressing has its own scan in the Cover Art Archive; the
+        # release-group front image is the fallback.
+        art_urls = [f"{CAA_BASE}/release/{release_mbid}/front-500"]
+        if rg_mbid:
+            art_urls.append(f"{CAA_BASE}/release-group/{rg_mbid}/front-500")
+
         result = {
             "release_mbid": release_mbid,
+            "release_group_mbid": rg_mbid,
             "title": data.get("title", ""),
             "artist": artist,
             "year": (data.get("date") or "")[:4],
-            "art_url": f"{CAA_BASE}/release/{release_mbid}/front-500",
+            "art_url": art_urls[0],
+            "art_urls": art_urls,
             "tracklist": tracklist,
         }
         cache.write_text(json.dumps(result), encoding="utf-8")
@@ -113,54 +131,75 @@ class MusicBrainzClient:
             return None
         return data["releases"][0]["id"]
 
-    async def search_releases(self, query: str, limit: int = 12) -> List[Dict[str, Any]]:
-        """Free-text release search for the companion app (artist + album).
+    async def search_albums(self, query: str, limit: int = 12) -> List[Dict[str, Any]]:
+        """Free-text album search for the companion app.
 
-        MusicBrainz returns one row per *pressing*, so a popular album shows up
-        many times (different countries/editions). We collapse to one row per
-        release-group, keeping the best edition (Official + has cover art + a
-        date), and preserve MusicBrainz's relevance order across groups.
+        Searches *release-groups* rather than releases: a release-group is
+        "the album" while releases are its individual pressings, so results
+        are inherently one-row-per-album with the canonical title and the
+        original release year. MusicBrainz's relevance score is nudged so
+        studio albums outrank live/compilation/remix variants of themselves.
+        """
+        data = await self._get(
+            f"{MB_BASE}/release-group",
+            {"query": _escape_lucene(query.strip()), "fmt": "json", "limit": 25},
+        )
+        ranked: List[tuple[int, int, Dict[str, Any]]] = []
+        for pos, rg in enumerate((data or {}).get("release-groups", [])):
+            releases = rg.get("releases") or []
+            if not releases:
+                continue  # nothing addable
+            artist = "".join(
+                ac.get("name", "") + ac.get("joinphrase", "")
+                for ac in rg.get("artist-credit", [])
+            )
+            ptype = (rg.get("primary-type") or "").lower()
+            bonus = {"album": 8, "ep": 4, "single": 2}.get(ptype, 0)
+            bonus -= 3 * len(rg.get("secondary-types") or [])
+            row = {
+                "release_group_mbid": rg["id"],
+                # Fallback for clients that add by concrete release; the add
+                # path re-resolves the best pressing from the group anyway.
+                "release_mbid": releases[0].get("id"),
+                "title": rg.get("title", ""),
+                "artist": artist,
+                "year": (rg.get("first-release-date") or "")[:4],
+                "type": ptype,
+                "art_url": f"{CAA_BASE}/release-group/{rg['id']}/front-250",
+            }
+            ranked.append((int(rg.get("score", 0)) + bonus, pos, row))
+        # Stable: score desc, then MusicBrainz's own order.
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        return [row for _, _, row in ranked[:limit]]
+
+    async def best_release_for_group(self, rg_mbid: str) -> Optional[str]:
+        """Pick the pressing of an album best suited to this app.
+
+        Prefer Official releases on Vinyl (so track positions come out as
+        A1/B2 and side grouping works), then dated ones, tie-broken by the
+        earliest date (the original pressing, not a 40th-anniversary box).
         """
         data = await self._get(
             f"{MB_BASE}/release",
-            {"query": query, "fmt": "json", "limit": max(limit * 2, 25)},
+            {"release-group": rg_mbid, "inc": "media", "fmt": "json",
+             "limit": 100},
         )
-        groups: Dict[str, tuple[int, Dict[str, Any]]] = {}
-        order: List[str] = []
-        for rel in (data or {}).get("releases", []):
-            rg_id = (rel.get("release-group") or {}).get("id") or rel["id"]
-            rank = self._release_rank(rel)
-            if rg_id not in groups:
-                groups[rg_id] = (rank, self._release_row(rel))
-                order.append(rg_id)
-            elif rank > groups[rg_id][0]:
-                groups[rg_id] = (rank, self._release_row(rel))
-        return [groups[g][1] for g in order][:limit]
+        releases = (data or {}).get("releases") or []
+        if not releases:
+            return None
 
-    @staticmethod
-    def _release_rank(rel: Dict[str, Any]) -> int:
-        """Higher is a better edition to represent its release-group."""
-        rank = 0
-        if (rel.get("status") or "").lower() == "official":
-            rank += 4
-        if (rel.get("cover-art-archive") or {}).get("front"):
-            rank += 2
-        if rel.get("date"):
-            rank += 1
-        return rank
+        def rank(rel: Dict[str, Any]) -> tuple:
+            score = 0
+            if (rel.get("status") or "").lower() == "official":
+                score += 8
+            formats = " ".join(
+                (m.get("format") or "") for m in rel.get("media") or []
+            ).lower()
+            if "vinyl" in formats:
+                score += 4
+            if rel.get("date"):
+                score += 1
+            # Higher score first; among equals the earliest date wins ("" last).
+            return (-score, rel.get("date") or "9999")
 
-    @staticmethod
-    def _release_row(rel: Dict[str, Any]) -> Dict[str, Any]:
-        artist = "".join(
-            ac.get("name", "") + ac.get("joinphrase", "")
-            for ac in rel.get("artist-credit", [])
-        )
-        return {
-            "release_mbid": rel["id"],
-            "title": rel.get("title", ""),
-            "artist": artist,
-            "year": (rel.get("date") or "")[:4],
-            "tracks": rel.get("track-count"),
-            "country": rel.get("country"),
-            "art_url": f"{CAA_BASE}/release/{rel['id']}/front-250",
-        }
+        return sorted(releases, key=rank)[0].get("id")

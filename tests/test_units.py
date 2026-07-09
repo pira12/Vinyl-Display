@@ -13,7 +13,7 @@ from backend.recognition.models import (
 def test_config_defaults():
     cfg = load_config("does-not-exist.yaml")
     assert cfg.server.port == 8080
-    assert cfg.recognition.backend == "olaf"
+    assert cfg.recognition.backend == "shazam"
     assert cfg.recognition.fast_interval_seconds == 3.0
 
 
@@ -30,7 +30,7 @@ def test_config_loads_nested_sections(tmp_path):
     assert cfg.audio.device == 2
     assert cfg.audio.silence_rms == 0.05
     assert cfg.server.port == 9000
-    assert cfg.recognition.backend == "olaf"   # unspecified key keeps its default
+    assert cfg.recognition.backend == "shazam"  # unspecified key keeps its default
 
 
 def test_state_listening_toggle():
