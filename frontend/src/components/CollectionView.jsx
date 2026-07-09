@@ -254,6 +254,7 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
                     {r.artist}
                     {r.year ? ` · ${r.year}` : ""}
                     {r.tracks ? ` · ${r.tracks} trks` : ""}
+                    {r.type && r.type !== "album" ? ` · ${r.type.toUpperCase()}` : ""}
                   </div>
                 </div>
                 <button

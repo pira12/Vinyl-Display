@@ -37,6 +37,9 @@ class StateManager:
         # Last (side_key, track_index) we locked on, so request-driven
         # recognition can tell "same track -> resync" from "new track".
         self.current_ident: Optional[tuple] = None
+        # Consecutive failed recognitions. One miss during a quiet passage is
+        # normal; a streak means the side ended or the needle lifted.
+        self.miss_streak: int = 0
 
         self._listeners: Set[Any] = set()
         self._loop: Optional[asyncio.AbstractEventLoop] = None

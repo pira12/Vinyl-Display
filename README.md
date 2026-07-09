@@ -91,6 +91,9 @@ Open `https://vinyl.example.com` on the iPad (add it to the Home Screen for a
 full-screen display). In Collection mode, tap **Start listening** and grant the
 microphone when asked. Continuous listening runs while the app is in the
 foreground with the screen awake. That's it — put on a record and it shows up.
+When a track that isn't in your collection is recognized, the display offers a
+one-tap **Save to collection** button that finds the album, caches its
+tracklist/lyrics/art, and upgrades the display in place.
 
 ### Adding records to the collection
 

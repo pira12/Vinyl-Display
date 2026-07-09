@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { loadToken } from "./api.js";
 import { useNowPlaying } from "./hooks/useNowPlaying.js";
 import { useMic } from "./hooks/useMic.js";
@@ -21,9 +21,13 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [authNeeded, setAuthNeeded] = useState(false);
   const state = useNowPlaying();
-  // Stable identity so useMic's effects don't re-subscribe on every render.
+  // Stable identities so useMic's effects don't re-subscribe on every render;
+  // the state getter lets its scheduler wake up right after a track ends.
+  const stateRef = useRef(null);
+  stateRef.current = state;
+  const getState = useCallback(() => stateRef.current, []);
   const onAuthError = useCallback(() => setAuthNeeded(true), []);
-  const mic = useMic(onAuthError);
+  const mic = useMic(onAuthError, getState);
 
   useEffect(() => {
     loadToken();
@@ -57,7 +61,7 @@ export default function App() {
       <div className="relative z-[2]">
         <ModeBar mode={mode} setMode={setMode} hideInDisplay={mode === "display"} />
         {mode === "display" ? (
-          <DisplayView state={state} mic={mic} />
+          <DisplayView state={state} mic={mic} toast={setToast} />
         ) : (
           <CollectionView
             state={state}

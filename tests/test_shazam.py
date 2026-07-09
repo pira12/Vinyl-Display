@@ -170,6 +170,40 @@ def test_apply_none_sets_listening(tmp_path):
     assert state.current_ident is None
 
 
+def test_apply_clamps_position_to_track_length(tmp_path):
+    state, index = StateManager(), _index(tmp_path)
+    # Money is 382s; an offset near the end plus the clip would overshoot.
+    _apply(state, index, ShazamResult(title="Money", artist="Pink Floyd",
+                                      offset_seconds=380.0))
+    assert state.position_ms == 382000
+
+
+def test_quiet_passage_misses_keep_the_track_up(tmp_path):
+    state, index = StateManager(), _index(tmp_path)
+    _apply(state, index, ShazamResult(title="Money", artist="Pink Floyd",
+                                      offset_seconds=10.0))
+    ident = state.current_ident
+    _apply(state, index, None)
+    _apply(state, index, None)
+    assert state.status == "playing"          # two misses tolerated
+    assert state.current_ident == ident       # next hit resyncs, no re-publish
+    _apply(state, index, None)
+    assert state.status == "listening"        # streak: the side really ended
+    assert state.current_ident is None
+
+
+def test_miss_streak_resets_on_match(tmp_path):
+    state, index = StateManager(), _index(tmp_path)
+    r = ShazamResult(title="Money", artist="Pink Floyd", offset_seconds=10.0)
+    _apply(state, index, r)
+    _apply(state, index, None)
+    _apply(state, index, None)
+    _apply(state, index, r)                   # lock again before the streak
+    _apply(state, index, None)
+    _apply(state, index, None)
+    assert state.status == "playing"          # counter restarted at the match
+
+
 # -- /api/recognize with a shazam-style backend ----------------------------------
 
 class _FakeShazamBackend:
@@ -237,3 +271,56 @@ def test_recognize_endpoint_no_match_reports_listening(tmp_path):
                     content=_wav_bytes())
     assert r.json()["matched"] is False
     assert state.status == "listening"
+
+
+# -- one-tap save from the display ------------------------------------------------
+
+def test_add_current_saves_external_track_and_upgrades_display(tmp_path):
+    backend = _FakeShazamBackend(
+        ShazamResult(title="Kashmir", artist="Led Zeppelin",
+                     album="Physical Graffiti", offset_seconds=30.0))
+    client, state, enr = _app(tmp_path, backend)
+    client.post("/api/recognize", headers={"X-Auth-Token": "t"},
+                content=_wav_bytes(seconds=2.0))
+    assert state.album["in_collection"] is False
+
+    async def fake_search(query):
+        assert "Physical Graffiti" in query and "Led Zeppelin" in query
+        return [{"release_group_mbid": "rg", "release_mbid": "rel",
+                 "title": "Physical Graffiti", "artist": "Led Zeppelin"}]
+
+    async def fake_add(release_mbid=None, release_group_mbid=None):
+        album = Album(id="pg", title="Physical Graffiti",
+                      artist="Led Zeppelin", release_group_mbid="rg",
+                      tracklist=[AlbumTrack(title="Kashmir", position="B1",
+                                            length_ms=506000)])
+        enr.index.add_album(album)
+        return enr.album_summary(album)
+
+    enr.search = fake_search
+    enr.add_album = fake_add
+
+    r = client.post("/api/collection/add-current", headers={"X-Auth-Token": "t"})
+    assert r.status_code == 200
+    assert r.json()["album"]["title"] == "Physical Graffiti"
+    # The display upgraded in place: full album context, clock preserved.
+    assert state.album["title"] == "Physical Graffiti"
+    assert state.tracklist and state.current_ident == ("album", "pg", 0)
+    assert state.position_ms >= 32000
+
+
+def test_add_current_rejected_when_nothing_playing(tmp_path):
+    client, _, _ = _app(tmp_path, _FakeShazamBackend(None))
+    r = client.post("/api/collection/add-current", headers={"X-Auth-Token": "t"})
+    assert r.status_code == 400
+
+
+def test_add_current_rejected_for_collection_tracks(tmp_path):
+    backend = _FakeShazamBackend(
+        ShazamResult(title="Money", artist="Pink Floyd", offset_seconds=10.0))
+    client, state, _ = _app(tmp_path, backend)
+    client.post("/api/recognize", headers={"X-Auth-Token": "t"},
+                content=_wav_bytes(seconds=2.0))
+    assert state.status == "playing"
+    r = client.post("/api/collection/add-current", headers={"X-Auth-Token": "t"})
+    assert r.status_code == 400

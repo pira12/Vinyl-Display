@@ -24,7 +24,7 @@ from typing import Any, Dict, Optional
 
 from ..state import StateManager
 from .models import TrackIndex
-from .recognizer import publish_album_track
+from .recognizer import note_miss, publish_album_track
 
 log = logging.getLogger(__name__)
 
@@ -136,11 +136,10 @@ async def apply_shazam(state: StateManager, index: TrackIndex,
     something is playing.
     """
     if result is None:
-        if state.status != "playing":
-            state.set_status("listening")
-        state.current_ident = None
+        note_miss(state)
         return False
 
+    state.miss_streak = 0
     position_ms: Optional[int] = None
     if result.offset_seconds is not None:
         # The offset marks where the clip *began* inside the track, and the
@@ -150,6 +149,9 @@ async def apply_shazam(state: StateManager, index: TrackIndex,
     hit = index.find_track(result.artist, result.title)
     if hit is not None:
         album, idx = hit
+        length_ms = album.tracklist[idx].length_ms
+        if position_ms is not None and length_ms:
+            position_ms = min(position_ms, length_ms)
         ident = ("album", album.id, idx)
         if ident == state.current_ident:
             if position_ms is not None:

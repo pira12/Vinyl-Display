@@ -1,19 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MicEngine } from "../audio/mic.js";
 import { downsample, encodeWav16, floatToPcm16, TARGET_RATE } from "../audio/wav.js";
+import { currentPosition } from "./useNowPlaying.js";
 import { api, Unauthorized } from "../api.js";
 
 const QUERY_SEC = 10;     // how much recent audio to send per recognition
 const FAST_MS = 3000;     // cadence before a track locks
 const SLOW_MS = 12000;    // cadence once locked (just drift correction)
+// After a track's expected end, the ring buffer still holds mostly the old
+// song; wait this long past the boundary so the clip is fresh enough to match.
+const BOUNDARY_LAG_MS = 5000;
+// Consecutive request *errors* (server down, WiFi drop) back off instead of
+// hammering; a plain "no match" keeps the fast cadence.
+const ERROR_BACKOFF_MS = [3000, 6000, 12000, 30000];
 const CHUNK_MS = 1000;    // enrollment upload cadence
+// Bound the enrollment retry queue (~1s of PCM per entry). Past this the
+// connection is truly gone and the side recording can't be saved intact.
+const MAX_PENDING_CHUNKS = 300;
 const IDENTIFY_SEC = 25;          // clip length for an AcoustID auto-label
-const IDENTIFY_AFTER_MISSES = 4;  // consecutive Olaf misses before trying AcoustID
+const IDENTIFY_AFTER_MISSES = 4;  // consecutive misses before trying AcoustID
 const IDENTIFY_COOLDOWN_MS = 60000; // don't hammer the free AcoustID quota
 
 // Single shared mic engine coordinating recognition and enrollment so they
-// never open two mic streams at once.
-export function useMic(onAuthError) {
+// never open two mic streams at once. `getState` returns the latest
+// now-playing state so the scheduler can wake up right after a track ends.
+export function useMic(onAuthError, getState) {
   const engine = useRef(null);
   const recTimer = useRef(null);
   const chunkTimer = useRef(null);
@@ -44,7 +55,10 @@ export function useMic(onAuthError) {
   }, []);
 
   const missCount = useRef(0);
+  const errorStreak = useRef(0);
   const lastIdentifyAt = useRef(0);
+  const identifyAvailable = useRef(true); // false once the server says so
+  const pendingChunks = useRef([]);       // enrollment PCM awaiting upload
 
   const [micActive, setMicActive] = useState(false);
   const [enrolling, setEnrolling] = useState(false);
@@ -68,36 +82,40 @@ export function useMic(onAuthError) {
   );
 
   // --- recognition loop ---
+  // Returns "match" | "miss" | "error" so the scheduler can pick the cadence.
   const recognizeOnce = useCallback(async () => {
     const eng = engine.current;
     if (!eng || !eng.active) {
       setDebug((d) => ({ ...d, last: "no engine" }));
-      return false;
+      return "miss";
     }
     await eng.resume(); // re-arm if iOS suspended the context
     const clip = eng.recent(QUERY_SEC);
     if (clip.length < eng.rate * 4) {
       setDebug((d) => ({ ...d, last: "buffering" }));
-      return false; // need a few seconds first
+      return "miss"; // need a few seconds first
     }
     const wav = encodeWav16(downsample(clip, eng.rate), TARGET_RATE);
     try {
       const res = await api.postBytes("/api/recognize", wav);
       const matched = !!(res && res.matched);
+      errorStreak.current = 0;
       setDebug((d) => ({ sent: d.sent + 1, last: matched ? "match" : "no match" }));
-      return matched;
+      return matched ? "match" : "miss";
     } catch (e) {
+      errorStreak.current += 1;
       setDebug((d) => ({ sent: d.sent + 1, last: "error" }));
       handleErr(e);
-      return false;
+      return "error";
     }
   }, [handleErr]);
 
-  // Best-effort auto-label via AcoustID after Olaf keeps missing. Rate-limited
-  // by a cooldown so it stays within the free AcoustID quota.
+  // Best-effort auto-label via AcoustID after recognition keeps missing.
+  // Rate-limited by a cooldown, and disabled for the whole session once the
+  // server reports the feature isn't configured (no key / no fpcalc).
   const identifyOnce = useCallback(async () => {
     const eng = engine.current;
-    if (!eng || !eng.active) return;
+    if (!eng || !eng.active || !identifyAvailable.current) return;
     const now = Date.now();
     if (now - lastIdentifyAt.current < IDENTIFY_COOLDOWN_MS) return;
     lastIdentifyAt.current = now;
@@ -107,6 +125,7 @@ export function useMic(onAuthError) {
     setIdentifying(true);
     try {
       const res = await api.postBytes("/api/identify", wav);
+      if (res && res.available === false) identifyAvailable.current = false;
       if (res && res.album) setLastIdentified(res.album);
     } catch (e) {
       handleErr(e);
@@ -115,24 +134,47 @@ export function useMic(onAuthError) {
     }
   }, [handleErr]);
 
+  // When to run the next recognition:
+  // - request errors: exponential backoff, so a down server isn't hammered
+  // - not locked on a track: fast, to catch the needle dropping
+  // - locked: cruise slowly (drift correction only), but wake up just after
+  //   the track is due to end so "up next" flips within seconds
+  const nextDelay = useCallback(
+    (outcome) => {
+      if (outcome === "error") {
+        const i = Math.min(errorStreak.current, ERROR_BACKOFF_MS.length) - 1;
+        return ERROR_BACKOFF_MS[Math.max(0, i)];
+      }
+      if (outcome !== "match") return FAST_MS;
+      const s = getState && getState();
+      if (s && s.status === "playing" && s.track && s.track.duration_ms) {
+        const remaining = s.track.duration_ms - currentPosition(s);
+        return Math.max(2000, Math.min(SLOW_MS, remaining + BOUNDARY_LAG_MS));
+      }
+      return SLOW_MS;
+    },
+    [getState]
+  );
+
   const scheduleRecognize = useCallback(
     (delay) => {
       clearTimeout(recTimer.current);
       recTimer.current = setTimeout(async () => {
         if (!micActiveRef.current) return;
-        let matched = false;
+        let outcome = "miss";
         if (!enrollingRef.current && !document.hidden) {
-          matched = await recognizeOnce();
-          if (matched) {
+          outcome = await recognizeOnce();
+          if (outcome === "match") {
             missCount.current = 0;
-          } else if (++missCount.current >= IDENTIFY_AFTER_MISSES) {
+          } else if (outcome === "miss" &&
+                     ++missCount.current >= IDENTIFY_AFTER_MISSES) {
             identifyOnce(); // fire and forget; cooldown guards the quota
           }
         }
-        if (micActiveRef.current) scheduleRecognize(matched ? SLOW_MS : FAST_MS);
+        if (micActiveRef.current) scheduleRecognize(nextDelay(outcome));
       }, delay);
     },
-    [recognizeOnce, identifyOnce]
+    [recognizeOnce, identifyOnce, nextDelay]
   );
 
   const startListening = useCallback(async () => {
@@ -173,15 +215,30 @@ export function useMic(onAuthError) {
   }, [startListening, stopListening]);
 
   // --- enrollment ---
-  const flushChunk = useCallback((final = false) => {
+  // Chunks that fail to upload (a WiFi blip mid-side) are queued and retried
+  // on the next tick instead of dropped — a lost chunk would leave a silent
+  // gap in the fingerprint and shift every track offset after it.
+  const flushChunk = useCallback(async (final = false) => {
     const eng = engine.current;
-    if (!eng) return Promise.resolve();
+    if (!eng) return;
     const frames = eng.drain();
-    if (!frames.length) return Promise.resolve();
-    const pcm = floatToPcm16(downsample(frames, eng.rate));
-    return api.postBytes("/api/record/chunk", pcm.buffer).catch((e) => {
-      if (!final) handleErr(e);
-    });
+    if (frames.length) {
+      const pcm = floatToPcm16(downsample(frames, eng.rate));
+      pendingChunks.current.push(pcm.buffer);
+    }
+    while (pendingChunks.current.length) {
+      try {
+        await api.postBytes("/api/record/chunk", pendingChunks.current[0]);
+        pendingChunks.current.shift();
+      } catch (e) {
+        if (final) throw e; // stop-and-save must not silently truncate
+        if (pendingChunks.current.length >= MAX_PENDING_CHUNKS) {
+          pendingChunks.current = [];
+          handleErr(new Error("Recording uploads keep failing — check the connection and re-record this side."));
+        }
+        return; // keep the queue; retry on the next tick
+      }
+    }
   }, [handleErr]);
 
   const startEnroll = useCallback(
@@ -196,6 +253,7 @@ export function useMic(onAuthError) {
       }
       enrollingRef.current = true;
       setEnrolling(true);
+      pendingChunks.current = [];
       engine.current.startAccum();
       clearInterval(chunkTimer.current);
       chunkTimer.current = setInterval(() => flushChunk(false), CHUNK_MS);
@@ -212,6 +270,7 @@ export function useMic(onAuthError) {
       const eng = engine.current;
       try {
         if (cancel) {
+          pendingChunks.current = [];
           await api.postJson("/api/record/cancel", {});
         } else {
           await flushChunk(true);
@@ -220,6 +279,7 @@ export function useMic(onAuthError) {
       } catch (e) {
         handleErr(e);
       } finally {
+        pendingChunks.current = [];
         if (eng) eng.stopAccum();
         // If the user wasn't actively listening, release the mic.
         if (!micActiveRef.current && eng) eng.stop();
