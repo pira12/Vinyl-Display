@@ -33,6 +33,15 @@ def _escape_lucene(query: str) -> str:
     return _LUCENE_SPECIAL.sub(r"\\\1", query)
 
 
+def _norm(s: str) -> str:
+    """Loose key for comparing an artist name to a query: lowercase, drop a
+    leading "the", strip everything but letters/digits."""
+    s = s.strip().lower()
+    if s.startswith("the "):
+        s = s[4:]
+    return re.sub(r"[^a-z0-9]", "", s)
+
+
 class MusicBrainzClient:
     def __init__(self, user_agent: str, cache_dir: str) -> None:
         self.user_agent = user_agent
@@ -131,46 +140,148 @@ class MusicBrainzClient:
             return None
         return data["releases"][0]["id"]
 
-    async def search_albums(self, query: str, limit: int = 12) -> List[Dict[str, Any]]:
-        """Free-text album search for the companion app.
-
-        Searches *release-groups* rather than releases: a release-group is
-        "the album" while releases are its individual pressings, so results
-        are inherently one-row-per-album with the canonical title and the
-        original release year. MusicBrainz's relevance score is nudged so
-        studio albums outrank live/compilation/remix variants of themselves.
-        """
-        data = await self._get(
-            f"{MB_BASE}/release-group",
-            {"query": _escape_lucene(query.strip()), "fmt": "json", "limit": 25},
-        )
-        ranked: List[tuple[int, int, Dict[str, Any]]] = []
-        for pos, rg in enumerate((data or {}).get("release-groups", [])):
-            releases = rg.get("releases") or []
-            if not releases:
-                continue  # nothing addable
+    def _rg_row(self, rg: Dict[str, Any],
+                artist: Optional[str] = None) -> Dict[str, Any]:
+        """Shape one release-group into a search-result row."""
+        if artist is None:
             artist = "".join(
                 ac.get("name", "") + ac.get("joinphrase", "")
                 for ac in rg.get("artist-credit", [])
             )
+        releases = rg.get("releases") or []
+        return {
+            "release_group_mbid": rg["id"],
+            # Fallback for clients that add by concrete release; the add path
+            # re-resolves the best pressing from the group anyway.
+            "release_mbid": releases[0].get("id") if releases else None,
+            "title": rg.get("title", ""),
+            "artist": artist,
+            "year": (rg.get("first-release-date") or "")[:4],
+            "type": (rg.get("primary-type") or "").lower(),
+            "art_url": f"{CAA_BASE}/release-group/{rg['id']}/front-250",
+        }
+
+    async def _top_artist(self, query: str) -> Optional[Dict[str, str]]:
+        """Return an artist whose name matches the query closely, else None.
+
+        Only a confident, near-exact match counts — so an album-title query
+        ("utopia") doesn't get hijacked by a weakly-matching artist.
+        """
+        nq = _norm(query)
+        if not nq:
+            return None
+        data = await self._get(
+            f"{MB_BASE}/artist",
+            {"query": _escape_lucene(query), "fmt": "json", "limit": 5},
+        )
+        for a in (data or {}).get("artists", []):
+            if int(a.get("score", 0)) >= 90 and _norm(a.get("name", "")) == nq:
+                return {"id": a["id"], "name": a.get("name", "")}
+        return None
+
+    async def _artist_albums(self, mbid: str, artist: str,
+                             limit: int) -> List[Dict[str, Any]]:
+        """That artist's studio albums/EPs, newest first.
+
+        Filters out live/compilation/remix/soundtrack variants (anything with a
+        secondary type) so the canonical records surface, not bootleg mixtapes
+        MusicBrainz's text score would otherwise rank first.
+        """
+        data = await self._get(
+            f"{MB_BASE}/release-group",
+            {"artist": mbid, "fmt": "json", "limit": 100},
+        )
+        rows = [
+            self._rg_row(rg, artist)
+            for rg in (data or {}).get("release-groups", [])
+            if not rg.get("secondary-types")
+            and (rg.get("primary-type") or "").lower() in ("album", "ep")
+        ]
+        rows.sort(key=lambda r: r["year"] or "", reverse=True)
+        return rows[:limit]
+
+    async def _rg_query(self, lucene: str, limit: int) -> List[Dict[str, Any]]:
+        """Run a release-group Lucene query, studio albums ranked first."""
+        data = await self._get(
+            f"{MB_BASE}/release-group",
+            {"query": lucene, "fmt": "json", "limit": 25},
+        )
+        ranked: List[tuple[int, int, Dict[str, Any]]] = []
+        for pos, rg in enumerate((data or {}).get("release-groups", [])):
+            if not rg.get("releases"):
+                continue  # nothing addable
             ptype = (rg.get("primary-type") or "").lower()
             bonus = {"album": 8, "ep": 4, "single": 2}.get(ptype, 0)
             bonus -= 3 * len(rg.get("secondary-types") or [])
-            row = {
-                "release_group_mbid": rg["id"],
-                # Fallback for clients that add by concrete release; the add
-                # path re-resolves the best pressing from the group anyway.
-                "release_mbid": releases[0].get("id"),
-                "title": rg.get("title", ""),
-                "artist": artist,
-                "year": (rg.get("first-release-date") or "")[:4],
-                "type": ptype,
-                "art_url": f"{CAA_BASE}/release-group/{rg['id']}/front-250",
-            }
-            ranked.append((int(rg.get("score", 0)) + bonus, pos, row))
-        # Stable: score desc, then MusicBrainz's own order.
-        ranked.sort(key=lambda item: (-item[0], item[1]))
+            ranked.append((int(rg.get("score", 0)) + bonus, pos, self._rg_row(rg)))
+        ranked.sort(key=lambda item: (-item[0], item[1]))  # score, then MB order
         return [row for _, _, row in ranked[:limit]]
+
+    async def _text_search(self, query: str, limit: int) -> List[Dict[str, Any]]:
+        """Title-or-artist release-group text search, studio albums first."""
+        esc = _escape_lucene(query)
+        return await self._rg_query(f"releasegroup:({esc}) OR artist:({esc})", limit)
+
+    async def _titled_albums(self, query: str) -> List[Dict[str, Any]]:
+        """Studio albums whose *title* matches the query, most-pressed first.
+
+        Release count is a decent popularity proxy MusicBrainz otherwise lacks:
+        the famous "Thriller"/"Nevermind"/"1989" has dozens of pressings while a
+        same-named obscure band's album has one or two. Returns raw
+        release-groups (they carry ``count`` and ``title`` for the caller).
+        """
+        esc = _escape_lucene(query)
+        data = await self._get(
+            f"{MB_BASE}/release-group",
+            {"query": f"releasegroup:({esc})", "fmt": "json", "limit": 100},
+        )
+        rgs = [
+            rg for rg in (data or {}).get("release-groups", [])
+            if rg.get("releases")
+            and not rg.get("secondary-types")
+            and (rg.get("primary-type") or "").lower() in ("album", "ep")
+        ]
+        rgs.sort(key=lambda rg: rg.get("count") or 0, reverse=True)
+        return rgs
+
+    async def search_albums(self, query: str, limit: int = 12) -> List[Dict[str, Any]]:
+        """Album search for the companion app.
+
+        Three strategies, in order:
+        1. A famous album *titled* exactly the query wins — release count (a
+           popularity proxy) tells "Thriller" (Michael Jackson, 85 pressings)
+           from a tiny same-named band. This also settles words that are both a
+           title and a band name ("1989", "rumours").
+        2. Otherwise, if the text is a confident *artist* name with a real
+           discography, lead with that artist's studio catalog, newest-first
+           ("the weeknd", "bad bunny") — text score alone buries their albums
+           under obscure title matches ("The Perfect Weeknd").
+        3. Otherwise fall back to the count-ranked title matches, then a
+           title-or-artist text search.
+
+        Results are one row per album (release-group), not per pressing.
+        """
+        q = query.strip()
+        if not q:
+            return []
+
+        FAMOUS_COUNT = 25  # pressings that mark a genuinely popular record
+        nq = _norm(q)
+        titled = await self._titled_albums(q)
+        exact = [rg for rg in titled if _norm(rg.get("title", "")) == nq]
+        if exact and (exact[0].get("count") or 0) >= FAMOUS_COUNT:
+            others = [rg for rg in titled if _norm(rg.get("title", "")) != nq]
+            return [self._rg_row(rg) for rg in (exact + others)[:limit]]
+
+        artist = await self._top_artist(q)
+        if artist:
+            catalog = await self._artist_albums(artist["id"], artist["name"], limit)
+            if len(catalog) >= 3:
+                return catalog
+
+        if titled:
+            return [self._rg_row(rg) for rg in titled[:limit]]
+        return await self._text_search(q, limit)
 
     async def best_release_for_group(self, rg_mbid: str) -> Optional[str]:
         """Pick the pressing of an album best suited to this app.

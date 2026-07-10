@@ -20,6 +20,35 @@ body {
   overscroll-behavior: none;
 }
 
+/* Shared "glass" surfaces so Collection/Settings match the Display view:
+   translucent, blurred, hairline white borders, one gold accent. */
+@layer components {
+  .glass-card {
+    @apply rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-md;
+  }
+  .glass-input {
+    @apply w-full rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3
+           text-fg transition-colors placeholder:text-muted;
+  }
+  .glass-input:focus {
+    @apply border-white/25 outline-none;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2
+           text-sm font-semibold transition-colors disabled:opacity-50;
+  }
+  .btn-accent {
+    @apply text-[#181400];
+    background: var(--accent);
+  }
+  .btn-ghost {
+    @apply border border-white/10 bg-white/5 text-fg;
+  }
+  .btn-ghost:hover {
+    @apply bg-white/10;
+  }
+}
+
 /* Blurred album-art backdrop shared by both modes */
 .backdrop {
   position: fixed;

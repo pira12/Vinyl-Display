@@ -83,7 +83,10 @@ def create_app(state: StateManager, index: TrackIndex,
     @app.get("/healthz")
     async def healthz() -> dict:
         from .version import VERSION
-        return {"status": "ok", "state": state.status, "version": VERSION}
+        # Public (ungated) so the app and onboarding can learn whether the
+        # companion API needs a token before making a call.
+        return {"status": "ok", "state": state.status, "version": VERSION,
+                "auth_required": bool(auth_token)}
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:

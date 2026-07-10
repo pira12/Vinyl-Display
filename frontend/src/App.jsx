@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { loadToken } from "./api.js";
+import { loadToken, setToken } from "./api.js";
 import { useNowPlaying } from "./hooks/useNowPlaying.js";
 import { useMic } from "./hooks/useMic.js";
 import { applyAccentFromUrl } from "./accent.js";
 import ModeBar from "./components/ModeBar.jsx";
 import DisplayView from "./components/DisplayView.jsx";
 import CollectionView from "./components/CollectionView.jsx";
+import Onboarding from "./components/Onboarding.jsx";
 import Toast from "./components/Toast.jsx";
 
 function initialMode() {
@@ -20,6 +21,9 @@ export default function App() {
   const [mode, setMode] = useState(initialMode);
   const [toast, setToast] = useState("");
   const [authNeeded, setAuthNeeded] = useState(false);
+  const [onboarding, setOnboarding] = useState(
+    () => !localStorage.getItem("vinyl_onboarded")
+  );
   const state = useNowPlaying();
   // Stable identities so useMic's effects don't re-subscribe on every render;
   // the state getter lets its scheduler wake up right after a track ends.
@@ -32,6 +36,11 @@ export default function App() {
   // re-renders constantly during playback. An inline arrow would reset the
   // timer every render and the banner would never clear.
   const clearToast = useCallback(() => setToast(""), []);
+  const finishOnboarding = useCallback(() => {
+    localStorage.setItem("vinyl_onboarded", "1");
+    setOnboarding(false);
+    setMode("collection"); // land them where they add records
+  }, []);
 
   useEffect(() => {
     loadToken();
@@ -77,6 +86,7 @@ export default function App() {
         )}
       </div>
       <Toast message={toast} onClear={clearToast} />
+      {onboarding && <Onboarding onDone={finishOnboarding} onToken={setToken} />}
     </div>
   );
 }
