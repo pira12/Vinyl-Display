@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+// How far ahead of the play clock to switch the active line. LRCLIB timestamps
+// mark where a line *starts*, and the highlight has a fade transition on top, so
+// without a lead the highlight lands a beat late. This nudges it onto the beat.
+const LEAD_MS = 400;
+
 // Spotify-style synced lyrics. Highlights the active line and scrolls it to a
 // fixed anchor. Plain (unsynced) lyrics render statically.
 export default function LyricScroller({ lyrics, position }) {
@@ -19,9 +24,10 @@ export default function LyricScroller({ lyrics, position }) {
 
   const idx = useMemo(() => {
     if (!synced) return -1;
+    const at = position + LEAD_MS;
     let found = -1;
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].t != null && lines[i].t <= position) found = i;
+      if (lines[i].t != null && lines[i].t <= at) found = i;
       else break;
     }
     return found;
