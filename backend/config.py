@@ -36,7 +36,7 @@ class AudioConfig:
 
 @dataclass
 class RecognitionConfig:
-    backend: str = "olaf"            # "olaf" | "mock"
+    backend: str = "shazam"          # "shazam" | "olaf" | "mock"
     olaf_bin: str = "olaf"
     olaf_db: str = "~/.olaf/db"
     interval_seconds: float = 20.0           # slow cadence: drift correction

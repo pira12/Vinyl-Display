@@ -106,12 +106,12 @@ export default function AlbumDetail({
                   {album.year ? ` · ${album.year}` : ""} · {album.track_count} tracks
                 </p>
                 <div className="mt-3 flex flex-wrap gap-1.5">
-                  {sides.map((side) => {
+                  {canRecord && sides.map((side) => {
                     const done = (album.enrolled_sides || []).includes(side);
                     return (
                       <button
                         key={side}
-                        disabled={!canRecord || !!busySide}
+                        disabled={!!busySide}
                         onClick={() => onRecord(album.id, side)}
                         title={done ? `Re-record side ${side}` : `Learn side ${side}`}
                         className={

@@ -11,7 +11,9 @@ audio:
   tmp_dir: null           # scratch dir for the query WAV; null = RAM (/dev/shm)
 
 recognition:
-  backend: olaf           # "olaf" for real fingerprinting, "mock" for development
+  backend: shazam         # "shazam": automatic identification, nothing to enroll
+                          # "olaf": self-hosted fingerprinting (record sides first)
+                          # "mock": fake record, for development
   olaf_bin: olaf          # path to the olaf executable
   olaf_db: ~/.olaf/db     # olaf fingerprint database location
   interval_seconds: 20      # slow cadence: re-sync the play clock for drift

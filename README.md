@@ -5,42 +5,55 @@ screen: now playing, up next, album art, a progress bar, and time-synced lyrics
 that scroll as the song plays.
 
 An iPad (or any browser) listens through its microphone and shows the display.
-A small server does the fingerprint matching and serves the web app, so it can
-run anywhere on your network, including as a container. Recognition is
-self-hosted and offline once a record is enrolled (no accounts, no API keys, no
-per-play cost): it fingerprints against a database of your own records.
+A small server does the matching and serves the web app, so it can run anywhere
+on your network, including as a container. Recognition works like Shazam — put
+on any record and it's identified automatically, with nothing to set up, no
+account, and no API key. Add your records to the collection (a quick search,
+one tap) and the display also gets the album's tracklist, "up next", and
+lyrics + art cached for that record.
 
 The web app has two modes, switched with a toggle at the top:
 
 - Display: the full-screen now-playing and lyrics view (your iPad screen).
-- Collection: search and add records, record their sides, and change settings.
+- Collection: search and add records, and change settings.
 
 ```
 iPad (Safari, https://vinyl.ossolab.net)            Server (container, any host)
-  mic ─► Web Audio ─► 10s WAV clip ──POST /api/recognize──► Olaf ─► {track, offset}
-                                                              ├─► MusicBrainz + Art
+  mic ─► Web Audio ─► 10s WAV clip ──POST /api/recognize──► Shazam ─► {track, offset}
+                                                              ├─► your collection
+                                                              │    (tracklist, art,
+                                                              │     cached lyrics)
                                                               ├─► LRCLIB (lyrics)
-  websocket ◄───────────────── now-playing state ◄──────────┘
+  websocket ◄───────────────── now-playing state ◄───────────┘
 ```
 
 ## How it works
 
 | Concern | Tool | Account? |
 |---|---|---|
-| Recognition + position-in-track | [Olaf](https://github.com/JorenSix/Olaf) (self-hosted) | none |
+| Recognition + position-in-track | Shazam (via [shazamio](https://github.com/shazamio/ShazamIO)) | none |
 | Tracklist / "up next" / album art | MusicBrainz + Cover Art Archive | none |
 | Time-synced lyrics | [LRCLIB](https://lrclib.net) | none |
 
 The iPad captures about ten seconds of microphone audio, downsamples it, and
-posts it to the server, which runs an Olaf query and returns where in the track
-you are. The frontend seeds a local clock with that offset and advances it for
-smooth progress and lyric scrolling, re-syncing every several seconds to absorb
-turntable speed drift. Microphone processing (echo cancellation, noise
+posts it to the server, which identifies the track and where in it you are. The
+result is matched against your collection: if the album is there, the display
+shows the full tracklist, up next, and the lyrics/art cached when you added it;
+if not, the track still shows, with art from Shazam and lyrics fetched on the
+fly. The frontend seeds a local clock with the reported offset and advances it
+for smooth progress and lyric scrolling, re-syncing every several seconds to
+absorb turntable speed drift. Microphone processing (echo cancellation, noise
 suppression, auto-gain) is turned off so the music isn't mangled before
-fingerprinting.
+matching.
 
-Both recognition and enrollment use the same iPad microphone, so matching is
-self-consistent and robust.
+### The offline alternative: Olaf
+
+The original self-hosted pipeline is still available (`recognition.backend:
+olaf` in Settings): it fingerprints your own records with
+[Olaf](https://github.com/JorenSix/Olaf) and matches fully offline, but each
+side has to be recorded once through the iPad mic before it can be recognized.
+Pick it if you'd rather not depend on an online service; the recording UI
+reappears automatically in that mode.
 
 ## Requirements
 
@@ -77,29 +90,38 @@ The first build is slow: it compiles Olaf with Zig and builds the React app.
 Open `https://vinyl.ossolab.net` on the iPad (add it to the Home Screen for a
 full-screen display). In Collection mode, tap **Start listening** and grant the
 microphone when asked. Continuous listening runs while the app is in the
-foreground with the screen awake.
+foreground with the screen awake. That's it — put on a record and it shows up.
+When a track that isn't in your collection is recognized, the display offers a
+one-tap **Save to collection** button that finds the album, caches its
+tracklist/lyrics/art, and upgrades the display in place.
 
-### Adding and enrolling records
+### Adding records to the collection
 
-In Collection mode, search an album and **Add** it; its tracklist, synced
-lyrics, and cover art are fetched and cached on the server for offline use. Then
-play a side from the beginning and tap **Record side A**; the iPad streams the
-side to the server, which fingerprints it and works out each track's start time.
-A side shows a green check once enrolled. Recording a side this way needs no
-prior setup beyond microphone access.
+In Collection mode, search an album and **Add** it. Search returns one row per
+album (not per pressing), and adding picks the best release automatically —
+official and on vinyl where possible, so track positions come out as A1/B2.
+The album's tracklist, synced lyrics, and cover art are fetched once and cached
+on the server; from then on a recognized track from that album gets the full
+display: tracklist, up next, and offline lyrics/art.
 
-A room microphone has a higher noise floor than a line input, so the silent
-gaps between tracks may be harder to detect. The `audio.silence_rms` setting
-tunes this, and it falls back to MusicBrainz track lengths when gaps aren't
-found.
+### Recording sides (olaf backend only)
+
+With the offline `olaf` backend, each side must also be recorded once: play a
+side from the beginning and tap **Record side A**; the iPad streams it to the
+server, which fingerprints it and works out each track's start time. A room
+microphone has a higher noise floor than a line input, so the silent gaps
+between tracks may be harder to detect. The `audio.silence_rms` setting tunes
+this, and it falls back to MusicBrainz track lengths when gaps aren't found.
+On the default shazam backend this whole step doesn't exist.
 
 ### Settings, in the web app
 
 Collection mode has a **Settings** panel: audio device (for local line-in dev),
 MusicBrainz User-Agent, silence threshold, sync intervals, speed factor, lyrics
-on/off, min match score, and the olaf/mock backend. Most changes apply
-immediately; device and backend changes apply on the next restart. Saving
-rewrites the config file, so its comments are not preserved.
+on/off, min match score (olaf), and the recognition backend (shazam / olaf /
+mock). Most changes apply immediately; device and backend changes apply on the
+next restart. Saving rewrites the config file, so its comments are not
+preserved.
 
 ### Start/stop listening
 
@@ -138,7 +160,8 @@ control surface:
   token. Only the collection, recording, recognition, and settings API is gated.
 - Input validation. Release IDs are validated as MusicBrainz UUIDs before they
   touch a file path or index key; API bodies fail closed with `400`. The app
-  fetches only MusicBrainz, LRCLIB, and Cover Art URLs it builds itself.
+  fetches only MusicBrainz, LRCLIB, Cover Art, and Shazam URLs it builds
+  itself.
 - TLS is terminated by Traefik; the container speaks plain HTTP internally and
   publishes no ports of its own.
 
@@ -153,9 +176,10 @@ backend/
   audio/             rolling buffer + silence splitting (line-in dev only)
   recognition/
     recognizer.py    apply_match()/publish_resolved(): resolve + publish state
-    olaf.py          shells out to the Olaf CLI
+    shazam.py        default backend: identify via Shazam, map to collection
+    olaf.py          offline backend: shells out to the Olaf CLI
     mock.py          fake record for --simulate
-    models.py        albums + sides index; resolve(side, offset) -> track
+    models.py        albums index + fuzzy find_track(); sides for olaf
   metadata/          MusicBrainz + LRCLIB clients (cached)
   enrollment.py      add albums; client-fed mic enrollment + fingerprinting
   state.py           now-playing state + websocket fan-out
@@ -171,9 +195,12 @@ docker-compose.yml   Traefik labels for vinyl.ossolab.net
 
 - iOS needs HTTPS and a user tap to start the microphone; continuous listening
   only runs while the app is foregrounded with the screen awake.
-- Offline-first runtime: lyrics and art are cached at enrollment, so matching
-  needs no internet. If MusicBrainz or LRCLIB are unreachable while adding an
-  album, it falls back to a local tracklist and omits lyrics/art.
-- Olaf's CLI columns have shifted between versions. If recognition matches but
-  shows the wrong track or offset, adjust the `COL_*` constants in
+- The shazam backend rides an unofficial (but widely used) API and needs
+  internet at play time. If that ever bothers you, the olaf backend matches
+  fully offline — at the cost of recording each side once.
+- Lyrics and art for collection albums are cached when the album is added. If
+  MusicBrainz or LRCLIB are unreachable at that moment, it falls back to a
+  local tracklist and omits lyrics/art.
+- Olaf's CLI columns have shifted between versions. If olaf recognition matches
+  but shows the wrong track or offset, adjust the `COL_*` constants in
   `backend/recognition/olaf.py`.
