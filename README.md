@@ -85,6 +85,68 @@ docker compose up -d --build
 
 The first build is slow: it compiles Olaf with Zig and builds the React app.
 
+### Deploying as a Dokploy Application (Dockerfile build)
+
+If you point Dokploy at this repo as an **Application** (Build Type: Dockerfile)
+instead of using the compose file, a few things must be set in the Dokploy UI —
+they are **not** inferred from the Dockerfile:
+
+1. **Build Type → Dockerfile.** Leave *Docker File* (defaults to `Dockerfile`),
+   *Context Path* (defaults to `.`), and *Build Stage* (defaults to the last
+   stage, the Python runtime) empty.
+2. **Ports.** `EXPOSE 8080` only documents the port — it does not publish it.
+   To reach the app at `http://<host>:8080`, add a port mapping under
+   **Advanced → Ports**: host `8080` → container `8080`. For the production
+   path, add a **Domain** (`vinyl.example.com`, container port `8080`) so
+   Traefik terminates TLS instead.
+3. **Volume.** Add a volume under **Advanced → Volumes**: mount `vinyl-data`
+   at `/data`. Without it, **every redeploy wipes the collection** (see the
+   `DATA_DIR` note above) — the compose file's `vinyl-data:/data` is not used
+   by a Dockerfile-built Application.
+4. **After changing dependencies, do a Clean Cache / no-cache rebuild.** A
+   normal Dokploy rebuild can reuse a stale cached image (every step shows
+   `CACHED`) and keep serving the old container.
+
+### Host CPU requirement (numpy / x86-64-v2)
+
+`shazamio >= 0.8` pulls in **numpy 2.x**, whose Linux wheels are built for the
+**x86-64-v2** CPU baseline. If the host CPU doesn't expose it, the container
+crashes at startup with:
+
+```
+RuntimeError: NumPy was built with baseline optimizations:
+(X86_V2) but your machine doesn't support: (X86_V2).
+```
+
+Bare-metal x86 hosts from ~2010 on are fine, but **a VM often masks the CPU
+flags** behind a generic model (`kvm64`/`qemu64`), which triggers this even
+though the physical CPU supports the instructions. On a **TrueNAS SCALE**,
+Proxmox, or libvirt VM: stop the VM, set **CPU Mode → Host Passthrough** (or
+Host Model), then start it. Verify from inside the guest — these should be
+listed:
+
+```bash
+grep -oE 'sse4_2|popcnt|avx' /proc/cpuinfo | sort -u
+```
+
+(ARM hosts such as a Raspberry Pi are unaffected — this is x86-only.)
+
+### Troubleshooting a deploy
+
+- **"Container is not running" in Dokploy's log/terminal viewer** — it can't
+  attach to a crashed container. Read the crash on the host instead (works on
+  stopped containers):
+
+  ```bash
+  docker logs $(docker ps -aq --filter name=vinyldisplay | head -1) 2>&1 | tail -50
+  ```
+
+  A traceback ending in the `X86_V2` message above → fix the host CPU (see
+  previous section).
+- **Blank page at `http://<host>:8080` but logs show `Uvicorn running`** — the
+  port isn't published; add the Ports mapping.
+- **Collection is empty after a redeploy** — the `/data` volume isn't mounted.
+
 ## Using it
 
 Open `https://vinyl.example.com` on the iPad (add it to the Home Screen for a

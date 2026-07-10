@@ -30,6 +30,13 @@ log = logging.getLogger(__name__)
 
 RECOGNIZE_TIMEOUT_S = 20
 
+# When a recognition misses right at a track boundary, keep the album flowing by
+# rolling to the next track instead of blanking. Only advance once the play
+# clock is within this margin of the current track's end, and cap consecutive
+# unconfirmed advances so a stopped record can't run through the whole side.
+BOUNDARY_GRACE_MS = 800
+MAX_PREDICTED_ADVANCES = 2
+
 
 @dataclass
 class ShazamResult:
@@ -126,6 +133,37 @@ def publish_external_track(state: StateManager, r: ShazamResult,
     )
 
 
+def _advance_within_album(state: StateManager, index: TrackIndex) -> bool:
+    """Roll a locked-on collection album to its next track on a boundary miss.
+
+    Returns True when it advanced (the display now shows the next track). Only
+    fires while a collection album is playing, once the play clock has reached
+    the current track's end, and up to ``MAX_PREDICTED_ADVANCES`` times before a
+    real match must reconfirm — so a stopped record can't run through the side.
+    """
+    ident = state.current_ident
+    if not (isinstance(ident, tuple) and len(ident) == 3 and ident[0] == "album"):
+        return False
+    if state.status != "playing" or state.predicted_advances >= MAX_PREDICTED_ADVANCES:
+        return False
+
+    _, album_id, idx = ident
+    album = index.albums.get(album_id)
+    if album is None or not album.tracklist or idx + 1 >= len(album.tracklist):
+        return False  # unknown album or already on the last track
+    length_ms = album.tracklist[idx].length_ms
+    if not length_ms or state.predicted_position_ms() < length_ms - BOUNDARY_GRACE_MS:
+        return False  # still inside the current track — a genuine miss
+
+    publish_album_track(state, album, idx + 1, 0)
+    state.current_ident = ("album", album_id, idx + 1)
+    state.predicted_advances += 1
+    state.miss_streak = 0
+    log.info("optimistic advance to track %d/%d of %s (boundary miss)",
+             idx + 2, len(album.tracklist), album.title)
+    return True
+
+
 async def apply_shazam(state: StateManager, index: TrackIndex,
                        result: Optional[ShazamResult], clip_seconds: float,
                        lyrics=None, lyrics_enabled: bool = True) -> bool:
@@ -136,10 +174,16 @@ async def apply_shazam(state: StateManager, index: TrackIndex,
     something is playing.
     """
     if result is None:
+        # A missed query at a track boundary shouldn't blank a known album —
+        # optimistically roll to the next track and hold it until a real match
+        # confirms or corrects.
+        if _advance_within_album(state, index):
+            return True
         note_miss(state)
         return False
 
     state.miss_streak = 0
+    state.predicted_advances = 0  # a real recognition confirms reality
     position_ms: Optional[int] = None
     if result.offset_seconds is not None:
         # The offset marks where the clip *began* inside the track, and the
@@ -148,6 +192,7 @@ async def apply_shazam(state: StateManager, index: TrackIndex,
 
     hit = index.find_track(result.artist, result.title)
     if hit is not None:
+        state.pending_external = None  # a solid in-collection read clears doubt
         album, idx = hit
         length_ms = album.tracklist[idx].length_ms
         if position_ms is not None and length_ms:
@@ -165,7 +210,21 @@ async def apply_shazam(state: StateManager, index: TrackIndex,
     if ident == state.current_ident:
         if position_ms is not None:
             state.resync(position_ms)
+        state.pending_external = None
         return True
+
+    # Switching to an out-of-collection track. If a known album is playing, a
+    # swap-boundary clip can resolve to a bogus one-off match, so don't abandon
+    # the album until this same track shows up twice. Meanwhile keep the album
+    # flowing to its next track rather than flashing "something else".
+    on_album = (isinstance(state.current_ident, tuple)
+                and len(state.current_ident) == 3
+                and state.current_ident[0] == "album")
+    if on_album and state.pending_external != ident:
+        state.pending_external = ident
+        _advance_within_album(state, index)  # roll on if we're at the boundary
+        return True  # hold the album; wait for a second read to confirm
+    state.pending_external = None
 
     lyr: Dict[str, Any] = {"synced": False, "lines": []}
     duration_ms: Optional[int] = None
