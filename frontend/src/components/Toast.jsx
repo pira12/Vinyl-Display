@@ -1,11 +1,17 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 export default function Toast({ message, onClear }) {
+  // Call the latest onClear without keying the timer on its identity, so a
+  // parent re-render (frequent during playback) can't keep resetting the timer
+  // and pin the banner open.
+  const clearRef = useRef(onClear);
+  clearRef.current = onClear;
+
   useEffect(() => {
     if (!message) return;
-    const t = setTimeout(onClear, 3500);
+    const t = setTimeout(() => clearRef.current(), 3500);
     return () => clearTimeout(t);
-  }, [message, onClear]);
+  }, [message]);
 
   if (!message) return null;
   return (
