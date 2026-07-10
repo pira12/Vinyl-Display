@@ -28,6 +28,10 @@ export default function App() {
   const getState = useCallback(() => stateRef.current, []);
   const onAuthError = useCallback(() => setAuthNeeded(true), []);
   const mic = useMic(onAuthError, getState);
+  // Stable identity: the Toast's auto-dismiss timer keys on this, and App
+  // re-renders constantly during playback. An inline arrow would reset the
+  // timer every render and the banner would never clear.
+  const clearToast = useCallback(() => setToast(""), []);
 
   useEffect(() => {
     loadToken();
@@ -72,7 +76,7 @@ export default function App() {
           />
         )}
       </div>
-      <Toast message={toast} onClear={() => setToast("")} />
+      <Toast message={toast} onClear={clearToast} />
     </div>
   );
 }
