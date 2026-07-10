@@ -23,16 +23,13 @@ export default function SettingsPanel({ onToast }) {
 
   if (!snapshot || !form) {
     return (
-      <div className="mb-5 rounded-2xl border border-[#2a2a33] bg-panel p-4 text-muted">
-        Loading settings…
-      </div>
+      <div className="glass-card mb-5 p-4 text-muted">Loading settings…</div>
     );
   }
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const restart = new Set(snapshot.restart_fields || []);
-  const fieldCls =
-    "w-full rounded-lg border border-[#2a2a33] bg-panel p-2.5 text-fg";
+  const fieldCls = "glass-input py-2.5";
 
   async function onSave() {
     const changes = {};
@@ -62,7 +59,7 @@ export default function SettingsPanel({ onToast }) {
 
   const deviceVal = form["audio.device"];
   return (
-    <div className="mb-5 rounded-2xl border border-[#2a2a33] bg-panel p-4">
+    <div className="glass-card mb-5 p-5">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5 text-sm text-muted">
           Audio device
@@ -134,12 +131,7 @@ export default function SettingsPanel({ onToast }) {
         </label>
       </div>
       <div className="mt-4">
-        <button
-          onClick={onSave}
-          disabled={saving}
-          className="rounded-lg px-4 py-2 font-semibold text-[#181400] disabled:opacity-40"
-          style={{ background: "var(--accent)" }}
-        >
+        <button onClick={onSave} disabled={saving} className="btn btn-accent">
           {saving ? "Saving…" : "Save settings"}
         </button>
       </div>

@@ -181,10 +181,7 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
     <div className="mx-auto max-w-[960px] px-4 pb-24 pt-[4.5rem]">
       <div className="mb-5 flex items-center justify-between gap-2">
         <h1 className="text-lg font-semibold tracking-tight">Collection</h1>
-        <button
-          onClick={() => setShowSettings((s) => !s)}
-          className="rounded-lg border border-[#2a2a33] bg-panel px-3 py-2 text-sm font-semibold text-fg"
-        >
+        <button onClick={() => setShowSettings((s) => !s)} className="btn btn-ghost">
           Settings
         </button>
       </div>
@@ -192,21 +189,18 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
       <MicStatus mic={mic} state={state} />
 
       {authNeeded && (
-        <div className="mb-4 rounded-xl border border-[var(--accent)] bg-[#2a1f10] p-3 text-sm">
-          This device isn't authorized. Open the <b>?token=…</b> link from the server
-          logs, or paste the token:
+        <div className="glass-card mb-4 border-[var(--accent)]/40 p-4 text-sm">
+          This device isn't authorized. Find the <b>?token=…</b> link in the server
+          logs (<code className="rounded bg-white/10 px-1">docker logs</code>), or
+          paste the token:
           <div className="mt-2 flex gap-2">
             <input
-              className="flex-1 rounded-lg border border-[#2a2a33] bg-panel p-2.5 text-fg"
+              className="glass-input flex-1 py-2.5"
               placeholder="token"
               value={tokenInput}
               onChange={(e) => setTokenInput(e.target.value)}
             />
-            <button
-              onClick={saveToken}
-              className="rounded-lg px-4 py-2 font-semibold text-[#181400]"
-              style={{ background: "var(--accent)" }}
-            >
+            <button onClick={saveToken} className="btn btn-accent">
               Save
             </button>
           </div>
@@ -216,7 +210,7 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
       {showSettings && <SettingsPanel onToast={toast} />}
 
       {!canRecord && (
-        <div className="mb-4 rounded-xl border border-[#2a2a33] bg-panel p-3 text-sm text-muted">
+        <div className="glass-card mb-4 p-4 text-sm text-muted">
           Records are recognized automatically — nothing to set up. Add your
           records below so the display can show their tracklist, up next, and
           synced lyrics.
@@ -225,8 +219,8 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
 
       <div className="relative flex items-center">
         <input
-          className="w-full rounded-lg border border-[#2a2a33] bg-panel p-3 pr-10"
-          placeholder="Search an album to add…"
+          className="glass-input pr-10"
+          placeholder="Search an album or artist to add…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -255,7 +249,7 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
             );
             const adding = pending.some((p) => p.key === key);
             return (
-              <div key={key} className="flex items-center gap-3 rounded-xl bg-panel p-3">
+              <div key={key} className="glass-card flex items-center gap-3 p-3">
                 <img
                   src={r.art_url || undefined}
                   alt=""
@@ -273,8 +267,12 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
                 <button
                   onClick={() => addAlbum(r)}
                   disabled={adding || owned}
-                  className="flex items-center gap-2 rounded-lg px-4 py-2 font-semibold text-[#181400] disabled:opacity-60"
-                  style={{ background: owned ? "#2f5128" : "var(--accent)" }}
+                  className="btn flex-none"
+                  style={
+                    owned
+                      ? { background: "#2f5128", color: "#cfe9c2" }
+                      : { background: "var(--accent)", color: "#181400" }
+                  }
                 >
                   {adding && <span className="spinner h-4 w-4" />}
                   {owned ? "Added ✓" : adding ? "Adding…" : "Add"}
@@ -292,7 +290,7 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
         {albums.length > 0 && (
           <div className="flex items-center gap-2">
             <input
-              className="w-40 rounded-lg border border-[#2a2a33] bg-panel px-3 py-1.5 text-sm"
+              className="glass-input w-40 px-3 py-1.5 text-sm"
               placeholder="Filter…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
@@ -300,7 +298,7 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
             <select
               value={sort}
               onChange={(e) => setSort(e.target.value)}
-              className="rounded-lg border border-[#2a2a33] bg-panel px-2 py-1.5 text-sm text-fg"
+              className="glass-input w-auto px-2 py-1.5 text-sm"
             >
               <option value="recent">Recently added</option>
               <option value="artist">Artist A–Z</option>
@@ -313,6 +311,17 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
 
       {shown.length === 0 && albums.length > 0 && (
         <p className="text-muted">No records match “{filter}”.</p>
+      )}
+      {albums.length === 0 && pendingShown.length === 0 && (
+        <div className="glass-card mt-1 flex flex-col items-center gap-2 px-6 py-12 text-center">
+          <div className="disc h-16 w-16 opacity-70" />
+          <p className="mt-2 font-semibold">No records yet</p>
+          <p className="max-w-xs text-sm text-muted">
+            Search for an album or artist above and tap Add. Its tracklist,
+            art, and synced lyrics get cached so the display lights up when you
+            play it.
+          </p>
+        </div>
       )}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
         {pendingShown.map((p) => (

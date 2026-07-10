@@ -213,11 +213,15 @@ microphone instead.
 The API can start audio capture and change settings, so it is treated as a
 control surface:
 
-- Token auth on `/api`. Every management or control call requires a token
-  (`X-Auth-Token` header or `?token=`). On first run a random token is generated,
-  saved next to the database (mode `600`), and logged as a `?token=…` link. Open
-  it once on the iPad; the token is stored in the browser and stripped from the
-  URL. Comparisons use `hmac.compare_digest`.
+- Auth is **off by default** so a home-LAN self-hoster just opens the app and it
+  works. Set **`REQUIRE_AUTH=1`** (env) when exposing the instance to the
+  internet — highly recommended in that case.
+- Token auth on `/api` (when enabled). Every management or control call then
+  requires a token (`X-Auth-Token` header or `?token=`). A random token is
+  generated on first run, saved next to the database (mode `600`), and logged as
+  a `?token=…` link; the first-run onboarding walks you through pasting it. You
+  can pin your own with `AUTH_TOKEN`. Comparisons use `hmac.compare_digest`.
+  `/healthz` reports `auth_required` so the app knows whether to ask.
 - The display stays open. `/`, `/ws`, and `/art` are read-only and need no
   token. Only the collection, recording, recognition, and settings API is gated.
 - Input validation. Release IDs are validated as MusicBrainz UUIDs before they

@@ -71,7 +71,9 @@ class PlaybackConfig:
 class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8080
-    require_auth: bool = True          # protect the companion API with a token
+    # Off by default so a home-LAN self-hoster just opens the app. Set
+    # REQUIRE_AUTH=1 (or this flag) when exposing the instance to the internet.
+    require_auth: bool = False          # protect the companion API with a token
     auth_token: Optional[str] = None   # set one, or let it auto-generate on first run
 
 

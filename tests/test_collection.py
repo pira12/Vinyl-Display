@@ -228,6 +228,21 @@ def _client(tmp_path, token="secret"):
     return TestClient(app), index
 
 
+def test_healthz_reports_auth_required(tmp_path):
+    client, _ = _client(tmp_path, token="secret")
+    body = client.get("/healthz").json()
+    assert body["auth_required"] is True
+    # ...and the API is gated.
+    assert client.get("/api/collection").status_code == 401
+
+
+def test_no_token_leaves_api_open_on_lan(tmp_path):
+    # Auth off (the LAN default): healthz says so and the API needs no token.
+    client, _ = _client(tmp_path, token=None)
+    assert client.get("/healthz").json()["auth_required"] is False
+    assert client.get("/api/collection").status_code == 200
+
+
 def test_patch_and_delete_album_endpoints(tmp_path):
     client, index = _client(tmp_path)
     h = {"X-Auth-Token": "secret"}
