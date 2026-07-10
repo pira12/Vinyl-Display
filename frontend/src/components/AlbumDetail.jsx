@@ -38,24 +38,18 @@ export default function AlbumDetail({
     <div className="fixed inset-0 z-[70] overflow-y-auto bg-black/80 backdrop-blur-sm">
       <div className="mx-auto max-w-[720px] px-4 pb-24 pt-6">
         <div className="mb-4 flex items-center justify-between">
-          <button
-            onClick={onClose}
-            className="rounded-lg border border-[#2a2a33] bg-panel px-3 py-2 text-sm font-semibold text-fg"
-          >
+          <button onClick={onClose} className="btn btn-ghost">
             ← Back
           </button>
           {!editing && (
-            <button
-              onClick={() => setEditing(true)}
-              className="rounded-lg border border-[#2a2a33] bg-panel px-3 py-2 text-sm font-semibold text-fg"
-            >
+            <button onClick={() => setEditing(true)} className="btn btn-ghost">
               Edit
             </button>
           )}
         </div>
 
         <div className="flex flex-col gap-4 sm:flex-row">
-          <div className="mx-auto aspect-square w-44 flex-none overflow-hidden rounded-lg bg-[#1a1a20] sm:mx-0">
+          <div className="mx-auto aspect-square w-44 flex-none overflow-hidden rounded-xl bg-[#1a1a20] shadow-[0_16px_40px_rgba(0,0,0,0.5)] sm:mx-0">
             {album.art_url ? (
               <img src={album.art_url} alt="" className="h-full w-full object-cover" />
             ) : (
@@ -71,19 +65,14 @@ export default function AlbumDetail({
                 {["title", "artist", "year"].map((f) => (
                   <input
                     key={f}
-                    className="w-full rounded-lg border border-[#2a2a33] bg-panel p-2.5 text-fg"
+                    className="glass-input py-2.5"
                     placeholder={f}
                     value={form[f]}
                     onChange={(e) => setForm((s) => ({ ...s, [f]: e.target.value }))}
                   />
                 ))}
                 <div className="flex gap-2 pt-1">
-                  <button
-                    onClick={save}
-                    disabled={saving}
-                    className="flex items-center gap-2 rounded-lg px-4 py-2 font-semibold text-[#181400] disabled:opacity-60"
-                    style={{ background: "var(--accent)" }}
-                  >
+                  <button onClick={save} disabled={saving} className="btn btn-accent">
                     {saving && <span className="spinner h-4 w-4" />}
                     {saving ? "Saving…" : "Save"}
                   </button>
@@ -92,7 +81,7 @@ export default function AlbumDetail({
                       setEditing(false);
                       setForm({ title: album.title, artist: album.artist, year: album.year });
                     }}
-                    className="rounded-lg border border-[#2a2a33] bg-panel px-3 py-2 text-fg"
+                    className="btn btn-ghost"
                   >
                     Cancel
                   </button>
@@ -134,11 +123,11 @@ export default function AlbumDetail({
         <h2 className="mb-2 mt-6 text-sm uppercase tracking-[0.08em] text-muted">
           Tracklist
         </h2>
-        <ol className="overflow-hidden rounded-xl border border-[#2a2a33]">
+        <ol className="glass-card overflow-hidden">
           {(album.tracklist || []).map((t, i) => (
             <li
               key={i}
-              className="flex items-center gap-3 border-b border-[#22222a] px-3 py-2 text-sm last:border-b-0"
+              className="flex items-center gap-3 border-b border-white/5 px-4 py-2.5 text-sm last:border-b-0"
             >
               <span className="w-8 flex-none text-muted">{t.position || i + 1}</span>
               <span className="min-w-0 flex-1 truncate">{t.title}</span>
@@ -151,27 +140,24 @@ export default function AlbumDetail({
           ))}
         </ol>
 
-        <div className="mt-8 border-t border-[#2a2a33] pt-4">
+        <div className="mt-8 border-t border-white/10 pt-4">
           {confirmDelete ? (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm">Delete this record and its fingerprints?</span>
               <button
                 onClick={() => onDelete(album.id)}
-                className="rounded-lg bg-[#7a2630] px-4 py-2 text-sm font-semibold text-white"
+                className="btn bg-[#7a2630] text-white hover:bg-[#8c2d38]"
               >
                 Delete
               </button>
-              <button
-                onClick={() => setConfirmDelete(false)}
-                className="rounded-lg border border-[#2a2a33] bg-panel px-3 py-2 text-sm text-fg"
-              >
+              <button onClick={() => setConfirmDelete(false)} className="btn btn-ghost">
                 Cancel
               </button>
             </div>
           ) : (
             <button
               onClick={() => setConfirmDelete(true)}
-              className="rounded-lg border border-[#5a2026] bg-[#2a1416] px-4 py-2 text-sm font-semibold text-[#e88]"
+              className="btn border border-[#5a2026] bg-[#2a1416]/60 text-[#e88] hover:bg-[#2a1416]"
             >
               Delete record
             </button>

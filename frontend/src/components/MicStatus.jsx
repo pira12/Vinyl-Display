@@ -31,7 +31,7 @@ export default function MicStatus({ mic, state }) {
   }
 
   return (
-    <div className="mb-5 flex items-center gap-3 rounded-xl border border-[#2a2a33] bg-panel p-3.5">
+    <div className="glass-card mb-5 flex items-center gap-3 p-4">
       <span className="relative flex h-3 w-3 flex-none">
         {(phase === "listening" || phase === "identifying") && (
           <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${dot} opacity-60`} />
@@ -64,11 +64,7 @@ export default function MicStatus({ mic, state }) {
       </div>
       <button
         onClick={mic.toggleListening}
-        className={
-          "flex-none rounded-lg border px-3.5 py-2 text-sm font-semibold " +
-          (mic.micActive ? "border-[#2a2a33] bg-bg text-fg" : "border-transparent text-[#181400]")
-        }
-        style={mic.micActive ? undefined : { background: "var(--accent)" }}
+        className={"btn flex-none " + (mic.micActive ? "btn-ghost" : "btn-accent")}
       >
         {mic.micActive ? "Stop" : "Start"}
       </button>

@@ -71,6 +71,13 @@ def build_app_from_env():
         os.environ.get("RECOGNITION_BACKEND") or cfg.recognition.backend
         or "shazam"
     ).lower()
+    # Auth is off by default (easy on a home LAN). Turn it on when exposing the
+    # instance to the internet: REQUIRE_AUTH=1 gates the companion API behind a
+    # token. Env wins over the config file.
+    if os.environ.get("REQUIRE_AUTH") is not None:
+        cfg.server.require_auth = os.environ["REQUIRE_AUTH"].strip().lower() in (
+            "1", "true", "yes", "on"
+        )
     # Optionally pin your own short, memorable access token.
     if os.environ.get("AUTH_TOKEN"):
         cfg.server.auth_token = os.environ["AUTH_TOKEN"]
