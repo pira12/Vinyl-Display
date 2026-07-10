@@ -324,3 +324,107 @@ def test_add_current_rejected_for_collection_tracks(tmp_path):
     assert state.status == "playing"
     r = client.post("/api/collection/add-current", headers={"X-Auth-Token": "t"})
     assert r.status_code == 400
+
+
+# -- optimistic auto-advance on a boundary miss ---------------------------------
+
+def test_boundary_miss_rolls_to_next_track(tmp_path):
+    # Locked on track 0 (90s) with the clock at its end; a miss should roll to
+    # track 1 rather than blank the display.
+    state, index = StateManager(), _index(tmp_path)
+    _apply(state, index,
+           ShazamResult(title="Speak to Me", artist="Pink Floyd",
+                        offset_seconds=82.0))  # 82 + 10s clip -> capped to 90s
+    assert state.current_index == 0
+    matched = _apply(state, index, None)
+    assert matched is True
+    assert state.status == "playing"
+    assert state.track["title"] == "Money"
+    assert state.current_index == 1
+    assert state.predicted_advances == 1
+
+
+def test_midtrack_miss_does_not_advance(tmp_path):
+    # A miss well inside a track is a genuine miss — hold the current track.
+    state, index = StateManager(), _index(tmp_path)
+    _apply(state, index,
+           ShazamResult(title="Speak to Me", artist="Pink Floyd",
+                        offset_seconds=10.0))
+    matched = _apply(state, index, None)
+    assert matched is False
+    assert state.current_index == 0
+    assert state.status == "playing"  # kept through a single miss
+
+
+def test_real_match_resets_predicted_advances(tmp_path):
+    state, index = StateManager(), _index(tmp_path)
+    _apply(state, index,
+           ShazamResult(title="Speak to Me", artist="Pink Floyd",
+                        offset_seconds=82.0))
+    _apply(state, index, None)  # optimistic advance -> Money
+    assert state.predicted_advances == 1
+    _apply(state, index,
+           ShazamResult(title="Money", artist="Pink Floyd", offset_seconds=30.0))
+    assert state.predicted_advances == 0
+    assert state.current_index == 1
+
+
+def test_optimistic_advance_is_capped(tmp_path):
+    index = TrackIndex(str(tmp_path / "ep.json"))
+    index.add_album(Album(id="ep", title="EP", artist="Band", tracklist=[
+        AlbumTrack(title="T1", position="A1", number=1, length_ms=1000),
+        AlbumTrack(title="T2", position="A2", number=2, length_ms=1000),
+        AlbumTrack(title="T3", position="A3", number=3, length_ms=1000),
+        AlbumTrack(title="T4", position="A4", number=4, length_ms=1000),
+    ]))
+    state = StateManager()
+    _apply(state, index,
+           ShazamResult(title="T1", artist="Band", offset_seconds=0.0))
+    assert _apply(state, index, None) is True   # T1 -> T2 (advance 1)
+    state.position_ms = 1000                     # pretend T2 reached its end
+    assert _apply(state, index, None) is True   # T2 -> T3 (advance 2)
+    state.position_ms = 1000
+    assert _apply(state, index, None) is False  # capped: no further advance
+    assert state.current_index == 2
+    assert state.predicted_advances == 2
+
+
+# -- swap-boundary guard: don't flip to a one-off out-of-collection match --------
+
+def test_oneoff_external_at_swap_holds_the_album(tmp_path):
+    state, index = StateManager(), _index(tmp_path)
+    _apply(state, index,
+           ShazamResult(title="Money", artist="Pink Floyd", offset_seconds=10.0))
+    assert state.album["title"] == "The Dark Side of the Moon"
+    # A single out-of-collection result (a boundary artifact) must not switch.
+    matched = _apply(state, index,
+                     ShazamResult(title="Random Single", artist="Someone Else",
+                                  offset_seconds=5.0))
+    assert matched is True
+    assert state.album["title"] == "The Dark Side of the Moon"  # held
+    assert state.pending_external == ("external", "someone else", "random single")
+
+
+def test_repeated_external_confirms_the_swap(tmp_path):
+    state, index = StateManager(), _index(tmp_path)
+    _apply(state, index,
+           ShazamResult(title="Money", artist="Pink Floyd", offset_seconds=10.0))
+    ext = ShazamResult(title="New Song", artist="New Band", offset_seconds=5.0)
+    _apply(state, index, ext)                       # first read: held
+    assert state.album["title"] == "The Dark Side of the Moon"
+    matched = _apply(state, index, ext)             # second read: confirmed
+    assert matched is True
+    assert state.track["title"] == "New Song"
+    assert state.album.get("in_collection") is False
+    assert state.pending_external is None
+
+
+def test_external_switches_immediately_when_no_album_playing(tmp_path):
+    state, index = StateManager(), _index(tmp_path)
+    # Nothing locked in yet -> an external match should show at once.
+    matched = _apply(state, index,
+                     ShazamResult(title="Solo Track", artist="Indie Artist",
+                                  offset_seconds=3.0))
+    assert matched is True
+    assert state.track["title"] == "Solo Track"
+    assert state.pending_external is None

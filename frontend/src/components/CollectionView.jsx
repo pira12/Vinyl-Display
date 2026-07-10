@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, setToken, Unauthorized } from "../api.js";
 import AlbumCard from "./AlbumCard.jsx";
+import PendingAlbumCard from "./PendingAlbumCard.jsx";
 import AlbumDetail from "./AlbumDetail.jsx";
 import SettingsPanel from "./SettingsPanel.jsx";
 import MicStatus from "./MicStatus.jsx";
@@ -11,7 +12,10 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState(null);
   const [searching, setSearching] = useState(false);
-  const [addingId, setAddingId] = useState("");
+  // Albums currently being added, each carrying the search info we already have
+  // (title/artist/art) so a placeholder can render while the server downloads
+  // the tracklist/lyrics/art. Supports adding several at once.
+  const [pending, setPending] = useState([]);
   const [showSettings, setShowSettings] = useState(false);
   const [target, setTarget] = useState(null); // { albumId, side } while enrolling
   const [tokenInput, setTokenInput] = useState("");
@@ -81,14 +85,18 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
 
   async function addAlbum(row) {
     const key = row.release_group_mbid || row.release_mbid;
-    setAddingId(key);
+    if (pending.some((p) => p.key === key)) return; // already adding
+    setPending((prev) => [
+      ...prev,
+      { key, title: row.title, artist: row.artist, year: row.year, art_url: row.art_url },
+    ]);
     // Adding by release-group lets the server pick the best pressing
     // (official, vinyl where possible); old rows fall back to the release id.
     const body = row.release_group_mbid
       ? { release_group_mbid: row.release_group_mbid }
       : { release_mbid: row.release_mbid };
     const res = await guard(() => api.postJson("/api/albums", body));
-    setAddingId("");
+    setPending((prev) => prev.filter((p) => p.key !== key));
     if (res && res.album) {
       toast("Added " + res.album.title);
       setResults((r) =>
@@ -163,6 +171,11 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
   }, [albums, filter, sort]);
 
   const selected = selectedId ? albums.find((a) => a.id === selectedId) : null;
+
+  // Placeholders for in-flight adds that haven't landed in the collection yet.
+  const pendingShown = pending.filter(
+    (p) => !albums.some((a) => a.id === p.key || a.release_group_mbid === p.key)
+  );
 
   return (
     <div className="mx-auto max-w-[960px] px-4 pb-24 pt-[4.5rem]">
@@ -240,7 +253,7 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
                 (r.release_group_mbid &&
                   a.release_group_mbid === r.release_group_mbid)
             );
-            const adding = addingId === key;
+            const adding = pending.some((p) => p.key === key);
             return (
               <div key={key} className="flex items-center gap-3 rounded-xl bg-panel p-3">
                 <img
@@ -302,6 +315,9 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
         <p className="text-muted">No records match “{filter}”.</p>
       )}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+        {pendingShown.map((p) => (
+          <PendingAlbumCard key={"pending-" + p.key} {...p} />
+        ))}
         {shown.map((a) => (
           <AlbumCard
             key={a.id}

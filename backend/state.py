@@ -40,6 +40,15 @@ class StateManager:
         # Consecutive failed recognitions. One miss during a quiet passage is
         # normal; a streak means the side ended or the needle lifted.
         self.miss_streak: int = 0
+        # How many times in a row we've optimistically rolled to the next album
+        # track without a recognition confirming it (bridges a missed boundary
+        # so the display stays ongoing; capped so a stopped record can't run
+        # through the whole side). Reset whenever a real match lands.
+        self.predicted_advances: int = 0
+        # An out-of-collection track seen once while a known album was playing.
+        # A swap-boundary clip (old song + new song) can resolve to a bogus
+        # one-off track; we only switch to it once a second read agrees.
+        self.pending_external: Optional[tuple] = None
 
         self._listeners: Set[Any] = set()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -104,6 +113,15 @@ class StateManager:
         self.position_ms = position_ms
         self._touch()
         self.publish()
+
+    def predicted_position_ms(self) -> int:
+        """Where the play clock is now, extrapolated from the last update.
+
+        Mirrors the frontend clock: last published position plus wall-clock
+        elapsed since, scaled by the turntable speed factor.
+        """
+        elapsed = (_now_ms() - self.updated_at) * self.speed_factor
+        return int(self.position_ms + max(0.0, elapsed))
 
     def _touch(self) -> None:
         self.updated_at = _now_ms()
