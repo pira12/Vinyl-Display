@@ -34,7 +34,7 @@ def test_validate_accepts_good_values():
 @pytest.mark.parametrize("changes", [
     {"audio.silence_rms": 2.0},                 # out of [0,1]
     {"audio.silence_rms": "loud"},              # not a number
-    {"recognition.backend": "shazam"},          # not olaf/mock
+    {"recognition.backend": "spotify"},         # not shazam/olaf/mock
     {"recognition.interval_seconds": 0},        # not positive
     {"recognition.min_match_score": -1},        # not positive
     {"recognition.min_match_score": True},      # bool is not a score
@@ -102,7 +102,7 @@ def test_manager_snapshot_reports_current_and_restart_fields(tmp_path):
     mgr = SettingsManager(cfg, str(tmp_path / "config.yaml"),
                           device_lister=lambda: [])
     snap = mgr.snapshot()
-    assert snap["values"]["recognition.backend"] == "olaf"
+    assert snap["values"]["recognition.backend"] == "shazam"
     assert set(snap["restart_fields"]) == set(RESTART_FIELDS)
     assert snap["devices"] == []
 
@@ -182,7 +182,7 @@ def test_settings_routes_require_token(tmp_path):
     assert client.get("/api/settings").status_code == 401
     ok = client.get("/api/settings", headers={"X-Auth-Token": "secret"})
     assert ok.status_code == 200
-    assert ok.json()["values"]["recognition.backend"] == "olaf"
+    assert ok.json()["values"]["recognition.backend"] == "shazam"
 
 
 def test_settings_post_applies_and_persists(tmp_path):

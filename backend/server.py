@@ -8,6 +8,7 @@ import hmac
 import logging
 import os
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -19,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from .enrollment import EnrollmentService
 from .recognition.models import TrackIndex
 from .recognition.recognizer import apply_match, publish_album_track
+from .recognition.shazam import apply_shazam
 from .settings import SettingsError
 from .state import StateManager
 
@@ -31,7 +33,7 @@ def create_app(state: StateManager, index: TrackIndex,
                enrollment: EnrollmentService, art_dir: str,
                auth_token: Optional[str] = None,
                settings=None, tmp_dir: Optional[str] = None,
-               acoustid=None) -> FastAPI:
+               acoustid=None, lyrics=None) -> FastAPI:
     tmp_dir = tmp_dir or tempfile.gettempdir()
 
     @asynccontextmanager
@@ -110,15 +112,59 @@ def create_app(state: StateManager, index: TrackIndex,
 
     @app.post("/api/albums")
     async def api_add_album(request: Request) -> JSONResponse:
-        body = await request.json()
-        mbid = (body or {}).get("release_mbid")
-        if not mbid:
-            return JSONResponse({"error": "release_mbid required"}, status_code=400)
+        body = await request.json() or {}
+        mbid = body.get("release_mbid")
+        rg_mbid = body.get("release_group_mbid")
+        if not mbid and not rg_mbid:
+            return JSONResponse({"error": "release_mbid or release_group_mbid "
+                                          "required"}, status_code=400)
         try:
-            album = await enrollment.add_album(mbid)
+            album = await enrollment.add_album(mbid, release_group_mbid=rg_mbid)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=400)
-        return JSONResponse({"album": album, "sides": enrollment.sides_for(mbid)})
+        return JSONResponse({"album": album,
+                             "sides": enrollment.sides_for(album["id"])})
+
+    @app.post("/api/collection/add-current")
+    async def api_add_current() -> JSONResponse:
+        """One tap from the display: save the now-playing album.
+
+        Only meaningful when the shazam backend matched a track outside the
+        collection. Resolves the Shazam metadata to a MusicBrainz album, adds
+        it, then upgrades the display in place without losing the play clock.
+        """
+        track, album_meta = state.track, state.album or {}
+        if state.status != "playing" or not track:
+            return JSONResponse({"error": "nothing is playing"}, status_code=400)
+        if album_meta.get("in_collection") is not False:
+            return JSONResponse({"error": "already in your collection"},
+                                status_code=400)
+        artist = track.get("artist") or ""
+        query = " ".join(filter(None, [
+            album_meta.get("title") or track.get("title"), artist,
+        ]))
+        rows = await enrollment.search(query)
+        if not rows:
+            return JSONResponse({"error": "couldn't find that album on "
+                                          "MusicBrainz"}, status_code=404)
+        try:
+            album = await enrollment.add_album(
+                rows[0].get("release_mbid"),
+                release_group_mbid=rows[0].get("release_group_mbid"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+        hit = index.find_track(artist, track.get("title") or "")
+        if hit is not None:
+            album_obj, idx = hit
+            elapsed = max(0, int(time.time() * 1000) - state.updated_at)
+            publish_album_track(
+                state, album_obj, idx,
+                state.position_ms + int(elapsed * state.speed_factor),
+            )
+            state.current_ident = ("album", album_obj.id, idx)
+        return JSONResponse({"album": album})
 
     @app.patch("/api/albums/{album_id}")
     async def api_edit_album(album_id: str, request: Request) -> JSONResponse:
@@ -184,7 +230,9 @@ def create_app(state: StateManager, index: TrackIndex,
     async def api_record_status() -> JSONResponse:
         return JSONResponse(enrollment.recording_status())
 
-    # Recognition: the iPad mic posts a short WAV clip; we fingerprint it here.
+    # Recognition: the iPad mic posts a short WAV clip. With the shazam
+    # backend it's identified online (no enrollment needed); with olaf it's
+    # fingerprinted against the locally enrolled sides.
     @app.post("/api/recognize")
     async def api_recognize(request: Request) -> JSONResponse:
         if not state.listening:
@@ -192,11 +240,22 @@ def create_app(state: StateManager, index: TrackIndex,
         data = await request.body()
         if not data:
             return JSONResponse({"error": "no audio"}, status_code=400)
-        resolved = await asyncio.to_thread(_recognize_clip, enrollment, index,
-                                           state, tmp_dir, data)
+        backend = enrollment.backend
+        if hasattr(backend, "recognize"):
+            clip = Path(tmp_dir) / "vinyl-clip.wav"
+            clip_seconds = await asyncio.to_thread(_write_clip, clip, data)
+            result = await backend.recognize(str(clip))
+            matched = await apply_shazam(
+                state, index, result, clip_seconds, lyrics=lyrics,
+                lyrics_enabled=enrollment.cfg.lyrics.enabled,
+            )
+        else:
+            resolved = await asyncio.to_thread(_recognize_clip, enrollment,
+                                               index, state, tmp_dir, data)
+            matched = resolved is not None
         return JSONResponse({
             "status": state.status,
-            "matched": resolved is not None,
+            "matched": matched,
             "track": state.track,
         })
 
@@ -275,6 +334,18 @@ def create_app(state: StateManager, index: TrackIndex,
         app.mount("/", StaticFiles(directory=str(web_dir), html=True), name="spa")
 
     return app
+
+
+def _write_clip(path: Path, wav: bytes) -> float:
+    """Blocking: persist the uploaded WAV and return its duration in seconds."""
+    path.write_bytes(wav)
+    try:
+        import soundfile as sf  # lazy
+
+        info = sf.info(str(path))
+        return float(info.frames) / float(info.samplerate or 1)
+    except Exception:  # noqa: BLE001 - a bad header still gets a sane default
+        return 10.0
 
 
 def _recognize_clip(enrollment: EnrollmentService, index: TrackIndex,

@@ -60,12 +60,17 @@ def build_app_from_env():
     cfg = load_config(config_path)
 
     # Pin all on-disk state to the data volume regardless of the config file.
-    cfg.recognition.backend = "olaf"
     cfg.recognition.olaf_db = str(data_dir / "olaf" / "db")
     cfg.metadata.cache_dir = str(data_dir / "cache")
     cfg.metadata.acoustid_api_key = (
         os.environ.get("ACOUSTID_API_KEY") or cfg.metadata.acoustid_api_key
     )
+    # Recognition backend: "shazam" (default, zero-setup) or "olaf"
+    # (self-hosted, needs enrolled sides). Env var wins over the config file.
+    cfg.recognition.backend = (
+        os.environ.get("RECOGNITION_BACKEND") or cfg.recognition.backend
+        or "shazam"
+    ).lower()
     # Optionally pin your own short, memorable access token.
     if os.environ.get("AUTH_TOKEN"):
         cfg.server.auth_token = os.environ["AUTH_TOKEN"]
@@ -75,11 +80,19 @@ def build_app_from_env():
     art_dir.mkdir(parents=True, exist_ok=True)
 
     index = TrackIndex(str(db_dir / "index.json"))
-    backend = OlafRecognizer(
-        olaf_bin=cfg.recognition.olaf_bin,
-        db_path=cfg.recognition.olaf_db,
-        min_score=cfg.recognition.min_match_score,
-    )
+    if cfg.recognition.backend == "olaf":
+        backend = OlafRecognizer(
+            olaf_bin=cfg.recognition.olaf_bin,
+            db_path=cfg.recognition.olaf_db,
+            min_score=cfg.recognition.min_match_score,
+        )
+    elif cfg.recognition.backend == "mock":
+        from .recognition.mock import MockRecognizer
+        backend = MockRecognizer(index=index)
+    else:
+        from .recognition.shazam import ShazamRecognizer
+        cfg.recognition.backend = "shazam"
+        backend = ShazamRecognizer()
     mb = MusicBrainzClient(cfg.metadata.musicbrainz_useragent, cfg.metadata.cache_dir)
     lyrics = LyricsClient(cfg.metadata.musicbrainz_useragent)
     state = StateManager(speed_factor=cfg.playback.speed_factor)
@@ -94,13 +107,14 @@ def build_app_from_env():
 
     from .version import VERSION
     tmp_dir = "/dev/shm" if Path("/dev/shm").exists() else None
-    log.info("Vinyl Display server ready (version=%s, data=%s, auto-label=%s)",
-             VERSION, data_dir, "on" if acoustid.available else "off")
+    log.info("Vinyl Display server ready (version=%s, data=%s, backend=%s, "
+             "auto-label=%s)", VERSION, data_dir, cfg.recognition.backend,
+             "on" if acoustid.available else "off")
     if token:
         log.info("Companion token: append ?token=%s once on your device.", token)
     return create_app(state, index, enrollment, art_dir=str(art_dir),
                       auth_token=token, settings=settings, tmp_dir=tmp_dir,
-                      acoustid=acoustid)
+                      acoustid=acoustid, lyrics=lyrics)
 
 
 app = build_app_from_env()

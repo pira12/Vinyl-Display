@@ -21,6 +21,29 @@ from .models import Match, Resolved, TrackIndex
 
 log = logging.getLogger(__name__)
 
+# Consecutive misses tolerated while a track is showing before the display
+# falls back to "listening". Quiet passages and one-off network hiccups fail a
+# single query; only a streak means the music actually stopped.
+MISSES_BEFORE_IDLE = 3
+
+
+def note_miss(state: StateManager) -> None:
+    """Record a failed recognition and decide whether to tear down the display.
+
+    While something is playing the current track is kept through short miss
+    streaks (the local clock keeps progress and lyrics moving); once the streak
+    says the side ended or the needle lifted, fall back to "listening".
+    """
+    state.miss_streak += 1
+    if state.status != "playing":
+        state.set_status("listening")
+        state.current_ident = None
+    elif state.miss_streak >= MISSES_BEFORE_IDLE:
+        log.info("no match %d times in a row — back to listening",
+                 state.miss_streak)
+        state.set_status("listening")
+        state.current_ident = None
+
 
 def _art_url(art_path: Optional[str]) -> Optional[str]:
     return f"/art/{Path(art_path).name}" if art_path else None
@@ -111,9 +134,7 @@ def apply_match(state: StateManager, index: TrackIndex,
     ``/api/recognize`` endpoint. Returns the resolved track, or None.
     """
     if match is None:
-        if state.status != "playing":
-            state.set_status("listening")
-        state.current_ident = None
+        note_miss(state)
         return None
 
     offset_ms = int(match.offset_seconds * 1000)
@@ -123,6 +144,7 @@ def apply_match(state: StateManager, index: TrackIndex,
         state.current_ident = None
         return None
 
+    state.miss_streak = 0
     ident = (match.key, resolved.index)
     if ident == state.current_ident:
         state.resync(resolved.position_ms)   # same track -> correct drift
@@ -135,12 +157,14 @@ def apply_match(state: StateManager, index: TrackIndex,
 
 class RecognitionService:
     def __init__(self, config, state: StateManager, index: TrackIndex,
-                 backend, capture=None, tmp_dir: Optional[str] = None) -> None:
+                 backend, capture=None, tmp_dir: Optional[str] = None,
+                 lyrics=None) -> None:
         self.cfg = config
         self.state = state
         self.index = index
         self.backend = backend
         self.capture = capture
+        self.lyrics = lyrics
         self.is_mock = config.recognition.backend == "mock"
         self._query_wav = Path(tmp_dir or ".") / "vinyl-query.wav"
 
@@ -171,6 +195,20 @@ class RecognitionService:
                 self.state.set_status("idle")
                 self.state.current_ident = None
                 return False
+
+        # Shazam-style backends identify the clip online and resolve against
+        # the collection themselves (no side references involved).
+        if hasattr(self.backend, "recognize"):
+            if self.capture is None:
+                return False
+            from .shazam import apply_shazam  # local import avoids a cycle
+
+            await asyncio.to_thread(self._dump_query_wav)
+            result = await self.backend.recognize(str(self._query_wav))
+            return await apply_shazam(
+                self.state, self.index, result, self.cfg.audio.query_seconds,
+                lyrics=self.lyrics, lyrics_enabled=self.cfg.lyrics.enabled,
+            )
 
         match = await self._recognize()
         return apply_match(self.state, self.index, match) is not None

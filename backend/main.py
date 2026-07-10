@@ -62,13 +62,17 @@ def build_backend(cfg, index: TrackIndex):
         from .recognition.mock import MockRecognizer
 
         return MockRecognizer(index=index)
-    from .recognition.olaf import OlafRecognizer
+    if cfg.recognition.backend == "olaf":
+        from .recognition.olaf import OlafRecognizer
 
-    return OlafRecognizer(
-        olaf_bin=cfg.recognition.olaf_bin,
-        db_path=cfg.recognition.olaf_db,
-        min_score=cfg.recognition.min_match_score,
-    )
+        return OlafRecognizer(
+            olaf_bin=cfg.recognition.olaf_bin,
+            db_path=cfg.recognition.olaf_db,
+            min_score=cfg.recognition.min_match_score,
+        )
+    from .recognition.shazam import ShazamRecognizer
+
+    return ShazamRecognizer()
 
 
 async def run(cfg, cfg_path: str = "config.yaml") -> None:
@@ -107,7 +111,8 @@ async def run(cfg, cfg_path: str = "config.yaml") -> None:
     lyrics = LyricsClient(cfg.metadata.musicbrainz_useragent)
 
     recognizer = RecognitionService(
-        cfg, state, index, backend, capture=capture, tmp_dir=_tmp_dir(cfg)
+        cfg, state, index, backend, capture=capture, tmp_dir=_tmp_dir(cfg),
+        lyrics=lyrics,
     )
 
     # Companion-app backend: search/add albums, capture & fingerprint sides.
@@ -123,7 +128,8 @@ async def run(cfg, cfg_path: str = "config.yaml") -> None:
 
     token = _resolve_token(cfg, db_dir)
     app = create_app(state, index, enrollment, art_dir=str(art_dir),
-                     auth_token=token, settings=settings, acoustid=acoustid)
+                     auth_token=token, settings=settings, acoustid=acoustid,
+                     lyrics=lyrics)
     server = uvicorn.Server(
         uvicorn.Config(app, host=cfg.server.host, port=cfg.server.port, log_level="info")
     )

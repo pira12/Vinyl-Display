@@ -92,7 +92,8 @@ export default function SettingsPanel({ onToast }) {
             value={form["recognition.backend"]}
             onChange={(e) => set("recognition.backend", e.target.value)}
           >
-            <option value="olaf">olaf (real)</option>
+            <option value="shazam">shazam (automatic, no enrollment)</option>
+            <option value="olaf">olaf (self-hosted, record sides first)</option>
             <option value="mock">mock (demo)</option>
           </select>
           {restart.has("recognition.backend") && (
