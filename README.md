@@ -246,6 +246,40 @@ Run the tests:
 cd frontend && npm run build     # frontend build check
 ```
 
+## Privacy
+
+An always-on microphone deserves a clear explanation, so here is exactly what
+it does and does not do.
+
+- **Audio goes to your own server, not a cloud.** You host Vinyl Display
+  yourself. The iPad sends clips to the machine you run it on, over your own
+  network. There is no Vinyl Display account or company backend.
+- **It only listens while the app is open.** Continuous listening runs only
+  after you tap Start, and only while the app is in the foreground with the
+  screen awake. iOS shows its microphone indicator the whole time, and Stop
+  listening pauses all capture.
+- **Clips are transient.** The app keeps a short rolling buffer in memory and
+  sends about ten seconds at a time. On the server each clip is written to a
+  single scratch file, in RAM by default, that is overwritten on the next
+  query. Audio is never archived and never logged.
+- **What leaves your network depends on the backend.** With the `olaf` backend,
+  recognition runs fully offline and no audio or audio-derived data leaves your
+  network at all. With the default `shazam` backend, the clip is reduced to a
+  spectral fingerprint and that fingerprint, not the audio, is sent to Shazam to
+  identify the track.
+- **The fingerprint cannot be turned back into sound.** A Shazam fingerprint
+  keeps only sparse spectral peaks with no phase information, so the original
+  audio, including any speech in the room, cannot be reconstructed from it. It
+  can only reveal which known recording is playing, which is what identification
+  needs. If you would rather not disclose even that, use the `olaf` backend.
+- **Metadata lookups are text only.** Tracklists, lyrics, and cover art are
+  fetched from MusicBrainz, LRCLIB, and the Cover Art Archive when you add an
+  album, then cached locally. These are ordinary lookups by album title, not
+  audio, and they need no account.
+
+For the most private setup, use the `olaf` backend so recognition stays fully
+on your own network.
+
 ## Security
 
 The API can start audio capture and change settings, so it is treated as a
