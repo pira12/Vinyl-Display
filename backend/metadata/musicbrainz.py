@@ -47,30 +47,48 @@ class MusicBrainzClient:
         self.user_agent = user_agent
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self._last_request = 0.0
-        self._lock = asyncio.Lock()
+        # Token bucket: ~1 request/second on average (MusicBrainz's limit), but
+        # a small burst so one interactive search's few lookups fire together
+        # instead of serializing a second apart.
+        self._tokens = 3.0
+        self._max_tokens = 3.0
+        self._token_at = time.monotonic()
+        self._bucket_lock = asyncio.Lock()
+        # Short-lived memo of album searches so repeats/re-renders are instant.
+        self._search_memo: Dict[tuple, List[Dict[str, Any]]] = {}
 
     # -- helpers -------------------------------------------------------------
     def _cache_path(self, kind: str, ident: str) -> Path:
         digest = hashlib.sha1(ident.encode()).hexdigest()[:16]
         return self.cache_dir / f"{kind}_{digest}.json"
 
+    async def _throttle(self) -> None:
+        """Take one token, waiting for refill if the bucket is empty. Only the
+        bookkeeping is locked, so requests themselves can run concurrently."""
+        async with self._bucket_lock:
+            now = time.monotonic()
+            self._tokens = min(
+                self._max_tokens, self._tokens + (now - self._token_at) * 1.0
+            )
+            self._token_at = now
+            if self._tokens < 1.0:
+                await asyncio.sleep((1.0 - self._tokens) / 1.0)
+                self._tokens = 0.0
+                self._token_at = time.monotonic()
+            else:
+                self._tokens -= 1.0
+
     async def _get(self, url: str, params: Dict[str, Any]) -> Optional[dict]:
-        # Be a good citizen: at most one MusicBrainz request per second.
-        async with self._lock:
-            wait = 1.0 - (time.monotonic() - self._last_request)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            self._last_request = time.monotonic()
-            headers = {"User-Agent": self.user_agent, "Accept": "application/json"}
-            try:
-                async with httpx.AsyncClient(timeout=15) as client:
-                    resp = await client.get(url, params=params, headers=headers)
-                    resp.raise_for_status()
-                    return resp.json()
-            except Exception as exc:  # noqa: BLE001
-                log.warning("MusicBrainz request failed (%s): %s", url, exc)
-                return None
+        await self._throttle()
+        headers = {"User-Agent": self.user_agent, "Accept": "application/json"}
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(url, params=params, headers=headers)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("MusicBrainz request failed (%s): %s", url, exc)
+            return None
 
     # -- public API ----------------------------------------------------------
     async def get_release(self, release_mbid: str) -> Optional[Dict[str, Any]]:
@@ -265,15 +283,31 @@ class MusicBrainzClient:
         if not q:
             return []
 
+        memo_key = (q.lower(), limit)
+        if memo_key in self._search_memo:
+            return self._search_memo[memo_key]
+
+        rows = await self._search_uncached(q, limit)
+
+        if len(self._search_memo) > 128:  # bound the memo
+            self._search_memo.pop(next(iter(self._search_memo)))
+        self._search_memo[memo_key] = rows
+        return rows
+
+    async def _search_uncached(self, q: str, limit: int) -> List[Dict[str, Any]]:
         FAMOUS_COUNT = 25  # pressings that mark a genuinely popular record
         nq = _norm(q)
-        titled = await self._titled_albums(q)
+        # The title (famous-check) and artist lookups are independent — run them
+        # together so one search doesn't pay for two round-trips back to back.
+        titled, artist = await asyncio.gather(
+            self._titled_albums(q), self._top_artist(q)
+        )
+
         exact = [rg for rg in titled if _norm(rg.get("title", "")) == nq]
         if exact and (exact[0].get("count") or 0) >= FAMOUS_COUNT:
             others = [rg for rg in titled if _norm(rg.get("title", "")) != nq]
             return [self._rg_row(rg) for rg in (exact + others)[:limit]]
 
-        artist = await self._top_artist(q)
         if artist:
             catalog = await self._artist_albums(artist["id"], artist["name"], limit)
             if len(catalog) >= 3:

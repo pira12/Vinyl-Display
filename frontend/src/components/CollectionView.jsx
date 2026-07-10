@@ -60,19 +60,23 @@ export default function CollectionView({ state, mic, authNeeded, setAuthNeeded, 
   // has already been issued (stale-response guard).
   useEffect(() => {
     const q = query.trim();
-    if (!q) {
+    // Ignore 0-1 char queries: too broad to be useful and they just clog the
+    // MusicBrainz rate limit while you're still typing.
+    if (q.length < 2) {
       setResults(null);
       setSearching(false);
       return;
     }
     const mySeq = ++searchSeq.current;
     setSearching(true);
+    // Wait for a real pause before searching — each query is a few rate-limited
+    // MusicBrainz calls, so firing on every keystroke stacks up latency.
     const timer = setTimeout(async () => {
       const data = await guard(() => api.get("/api/search?q=" + encodeURIComponent(q)));
       if (mySeq !== searchSeq.current) return; // superseded by a newer query
       setSearching(false);
       setResults(data ? data.results || [] : []);
-    }, 300);
+    }, 550);
     return () => clearTimeout(timer);
   }, [query, guard]);
 
