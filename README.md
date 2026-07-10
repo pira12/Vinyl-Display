@@ -14,6 +14,8 @@ Add your records to a collection with a quick search and one tap. After that,
 a recognized track from a saved album also shows the album's tracklist, an "up
 next" preview, and lyrics and art cached locally for that record.
 
+![The Display view: album art, progress, up next, and synced lyrics scrolling with the song](docs/screenshots/display-lyrics.jpg)
+
 ## Features
 
 - **Automatic recognition.** No enrollment, no fingerprinting your own records.
@@ -38,6 +40,10 @@ The web app has two modes, switched with a toggle at the top:
 - **Display** is the full-screen now-playing and lyrics view. This is what you
   leave open on the iPad.
 - **Collection** is where you search and add records and change settings.
+
+| Display, listening for a record | Collection |
+|---|---|
+| ![Display waiting, "Listening for a record"](docs/screenshots/listening.jpg) | ![Collection view with a grid of saved albums](docs/screenshots/collection.jpg) |
 
 ```
 iPad (Safari, https://vinyl.example.com)            Server (container, any host)
